@@ -21,6 +21,7 @@ import httpx
 
 from ..config import Settings
 from ..kalshi.auth import InvalidPrivateKey, Signer
+from ..kalshi.prices import format_cents, format_dollars
 from ..kalshi.rest import KalshiClient, KalshiError
 from ..kalshi.ws import BookHistory, MarketFeed
 from ..storage import Storage, Trade, User
@@ -227,7 +228,7 @@ class Engine:
             signal.coin,
             signal.side,
             signal.confidence,
-            signal.price,
+            signal.price_dc,
             signal.reason,
         )
 
@@ -241,9 +242,12 @@ class Engine:
         if broker is None:
             return
 
-        balance = await broker.balance()
+        balance_dc = await broker.balance()
         decision = await self.risk.check(
-            user, ticker=signal.ticker, entry_price=signal.price, balance_cents=balance
+            user,
+            ticker=signal.ticker,
+            entry_price_dc=signal.price_dc,
+            balance_dc=balance_dc,
         )
         if not decision.allowed:
             await self.notify(
@@ -253,7 +257,7 @@ class Engine:
             return
 
         result = await broker.buy(
-            signal.ticker, signal.side, decision.contracts, signal.price, ctx.book
+            signal.ticker, signal.side, decision.contracts, signal.price_dc, ctx.book
         )
         if not result.ok:
             await self.notify(
@@ -262,16 +266,16 @@ class Engine:
             )
             return
 
-        entry_price = int(result.price or signal.price)
-        target = exit_price_for(user, entry_price)
+        entry_dc = int(result.price_dc or signal.price_dc)
+        target_dc = exit_price_for(user, entry_dc)
         trade_id = await self.storage.record_entry(
             tg_id=user.tg_id,
             ticker=signal.ticker,
             coin=signal.coin,
             side=signal.side,
             count=result.filled,
-            entry_price=entry_price,
-            target_price=target,
+            entry_price_dc=entry_dc,
+            target_price_dc=target_dc,
             paper=broker.paper,
             entry_order_id=result.order_id,
             reason=signal.reason,
@@ -279,19 +283,19 @@ class Engine:
 
         # Place the exit immediately, so the position is never unmanaged.
         exit_order = await broker.sell(
-            signal.ticker, signal.side, result.filled, target, ctx.book
+            signal.ticker, signal.side, result.filled, target_dc, ctx.book
         )
         if exit_order.ok and exit_order.order_id:
             await self.storage.set_exit_order(trade_id, exit_order.order_id)
 
         tag = "📝 PAPER" if broker.paper else "⚡ LIVE"
-        cost = entry_price * result.filled
+        cost_dc = entry_dc * result.filled
         await self.notify(
             user.tg_id,
             f"{tag} · <b>{signal.coin} {signal.direction}</b>\n"
             f"Bought <b>{result.filled}</b> × {signal.side.upper()} @ "
-            f"<b>{entry_price}c</b> (${cost/100:.2f})\n"
-            f"Exit resting at <b>{target}c</b>\n"
+            f"<b>{format_cents(entry_dc)}</b> (${format_dollars(cost_dc)})\n"
+            f"Exit resting at <b>{format_cents(target_dc)}</b>\n"
             f"<i>{signal.reason}</i>\n"
             f"<code>{signal.ticker}</code>",
         )
@@ -370,12 +374,12 @@ class Engine:
 
     async def _manage_paper(self, trade: Trade) -> None:
         book = self.feed.book(trade.ticker)
-        target = trade.target_price or 99
+        target_dc = trade.target_price_dc or 999
         if book is not None and not book.is_stale:
             bid = book.best_bid(trade.side)
             # A resting sell fills once someone bids at or above our ask.
-            if bid is not None and bid >= target:
-                await self._close(trade, target, "target hit")
+            if bid is not None and bid >= target_dc:
+                await self._close(trade, target_dc, "target hit")
                 return
         await self._settle_if_expired(trade)
 
@@ -394,7 +398,7 @@ class Engine:
             if status in {"executed", "filled"} or (
                 remaining is not None and int(remaining) == 0 and status != "canceled"
             ):
-                await self._close(trade, trade.target_price or 99, "target hit")
+                await self._close(trade, trade.target_price_dc or 999, "target hit")
                 return
         await self._settle_if_expired(trade)
 
@@ -414,27 +418,30 @@ class Engine:
         if status in {"open", "active"} or result not in {"yes", "no"}:
             return  # not settled yet; check again next pass
 
-        settle_price = 100 if result == trade.side else 0
-        await self._close(trade, settle_price, f"settled {result.upper()}", "expired")
+        # A settled contract is worth $1.00 on the winning side, nothing on the
+        # losing one.
+        settle_dc = 1000 if result == trade.side else 0
+        await self._close(trade, settle_dc, f"settled {result.upper()}", "expired")
 
     async def _close(
-        self, trade: Trade, exit_price: int, reason: str, status: str = "closed"
+        self, trade: Trade, exit_price_dc: int, reason: str, status: str = "closed"
     ) -> None:
         closed = await self.storage.close_trade(
-            trade.id, exit_price=exit_price, status=status
+            trade.id, exit_price_dc=exit_price_dc, status=status
         )
         if closed is None:
             return  # someone else closed it first
-        pnl = closed.pnl_cents or 0
-        icon = "✅" if pnl > 0 else ("➖" if pnl == 0 else "❌")
+        pnl_dc = closed.pnl_dc or 0
+        icon = "✅" if pnl_dc > 0 else ("➖" if pnl_dc == 0 else "❌")
         tag = "📝 PAPER" if closed.paper else "⚡ LIVE"
+        sign = "+" if pnl_dc >= 0 else "-"
         await self.notify(
             closed.tg_id,
             f"{icon} {tag} · <b>{closed.coin} "
             f"{'UP' if closed.side == 'yes' else 'DOWN'}</b> closed\n"
-            f"{closed.count} × {closed.entry_price}c → <b>{exit_price}c</b> "
-            f"({reason})\n"
-            f"P/L <b>{pnl/100:+.2f}</b>",
+            f"{closed.count} × {format_cents(closed.entry_price_dc)} → "
+            f"<b>{format_cents(exit_price_dc)}</b> ({reason})\n"
+            f"P/L <b>{sign}${format_dollars(abs(pnl_dc))}</b>",
         )
 
 
@@ -451,7 +458,7 @@ def _format_signal(signal: Signal, ctx: MarketContext) -> str:
     lines = [
         _signal_header(signal, ctx),
         "",
-        f"Buy <b>{signal.side.upper()}</b> at <b>{signal.price}c</b>",
+        f"Buy <b>{signal.side.upper()}</b> at <b>{format_cents(signal.price_dc)}</b>",
         f"Window closes in {mins}m {secs:02d}s",
         f"<i>{signal.reason}</i>",
         f"<code>{signal.ticker}</code>",

@@ -2,12 +2,14 @@
 
 Kalshi publishes two resting-bid ladders per market: bids on YES and bids on NO.
 An ask on YES is just the mirror of a bid on NO, because a YES and a NO contract
-together always settle to 100 cents:
+together always settle to $1.00:
 
-    yes_ask = 100 - best_no_bid
-    no_ask  = 100 - best_yes_bid
+    yes_ask = $1.00 - best_no_bid
+    no_ask  = $1.00 - best_yes_bid
 
-All prices are integer cents in 1..99.
+All prices here are integer **deci-cents** (0-1000; see `prices.py`), which
+represents every tick of Kalshi's tapered deci-cent structure exactly. Counts
+are floats, because Kalshi supports fractional contracts down to 0.01.
 """
 
 from __future__ import annotations
@@ -15,30 +17,38 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from .prices import complement, parse_levels
+
 
 @dataclass
 class OrderBook:
     ticker: str
-    yes: dict[int, int] = field(default_factory=dict)  # price -> resting contracts
-    no: dict[int, int] = field(default_factory=dict)
+    yes: dict[int, float] = field(default_factory=dict)  # price_dc -> contracts
+    no: dict[int, float] = field(default_factory=dict)
     seq: int | None = None
     updated_at: float = 0.0
 
     # ---------------- mutation ----------------
 
-    def apply_snapshot(self, yes: list, no: list, seq: int | None = None) -> None:
-        self.yes = {int(p): int(q) for p, q in yes if int(q) > 0}
-        self.no = {int(p): int(q) for p, q in no if int(q) > 0}
+    def apply_snapshot(self, yes: object, no: object, seq: int | None = None) -> None:
+        """Replace the book from a snapshot frame (raw wire ladders)."""
+        self.yes = dict(parse_levels(yes))
+        self.no = dict(parse_levels(no))
         self.seq = seq
         self.updated_at = time.time()
 
-    def apply_delta(self, side: str, price: int, delta: int, seq: int | None = None) -> None:
+    def apply_delta(
+        self, side: str, price_dc: int, delta: float, seq: int | None = None
+    ) -> None:
         book = self.yes if side == "yes" else self.no
-        new_qty = book.get(int(price), 0) + int(delta)
-        if new_qty > 0:
-            book[int(price)] = new_qty
+        price_dc = int(price_dc)
+        new_qty = book.get(price_dc, 0.0) + float(delta)
+        # Fractional contracts mean a level can land just above zero on
+        # rounding; treat anything under the 0.01 minimum as gone.
+        if new_qty >= 0.01:
+            book[price_dc] = new_qty
         else:
-            book.pop(int(price), None)
+            book.pop(price_dc, None)
         self.seq = seq
         self.updated_at = time.time()
 
@@ -55,12 +65,12 @@ class OrderBook:
     @property
     def yes_ask(self) -> int | None:
         best_no = self.best_no_bid
-        return None if best_no is None else 100 - best_no
+        return None if best_no is None else complement(best_no)
 
     @property
     def no_ask(self) -> int | None:
         best_yes = self.best_yes_bid
-        return None if best_yes is None else 100 - best_yes
+        return None if best_yes is None else complement(best_yes)
 
     def best_bid(self, side: str) -> int | None:
         return self.best_yes_bid if side == "yes" else self.best_no_bid
@@ -68,8 +78,25 @@ class OrderBook:
     def best_ask(self, side: str) -> int | None:
         return self.yes_ask if side == "yes" else self.no_ask
 
+    def size_at(self, side: str, price_dc: int) -> float:
+        book = self.yes if side == "yes" else self.no
+        return book.get(int(price_dc), 0.0)
+
+    def size_at_ask(self, side: str) -> float:
+        """Contracts available to lift on `side` at the touch.
+
+        Buying YES means hitting the best NO bid, so the size on offer is the
+        size resting at the mirrored price on the opposite ladder.
+        """
+        ask = self.best_ask(side)
+        if ask is None:
+            return 0.0
+        opposite = "no" if side == "yes" else "yes"
+        return self.size_at(opposite, complement(ask))
+
     @property
     def spread(self) -> int | None:
+        """YES spread in deci-cents."""
         bid, ask = self.best_yes_bid, self.yes_ask
         if bid is None or ask is None:
             return None
@@ -77,13 +104,13 @@ class OrderBook:
 
     @property
     def mid(self) -> float | None:
-        """Mid of the YES market, in cents."""
+        """Mid of the YES market, in deci-cents."""
         bid, ask = self.best_yes_bid, self.yes_ask
         if bid is None or ask is None:
             return None
         return (bid + ask) / 2
 
-    def depth(self, side: str, levels: int = 3) -> int:
+    def depth(self, side: str, levels: int = 3) -> float:
         """Total contracts resting in the top `levels` bids on `side`."""
         book = self.yes if side == "yes" else self.no
         prices = sorted(book, reverse=True)[:levels]
@@ -102,7 +129,7 @@ class OrderBook:
         return (yes_depth - no_depth) / total
 
     def microprice(self, levels: int = 3) -> float | None:
-        """Depth-weighted fair value of YES, in cents.
+        """Depth-weighted fair value of YES, in deci-cents.
 
         Weighting the two sides of the spread by opposing depth gives an
         estimate that leans toward the side likely to be hit next.

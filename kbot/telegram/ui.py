@@ -10,6 +10,7 @@ import html
 import time
 
 from ..config import Settings
+from ..kalshi.prices import format_cents, format_dollars
 from ..storage import Trade, User
 from ..strategy import REGISTRY
 
@@ -265,11 +266,15 @@ def risk_keyboard(user: User) -> dict:
     )
 
 
-def risk_text(user: User, realised_today: int, exposure: int, open_count: int) -> str:
+def risk_text(
+    user: User, realised_today_dc: int, exposure_dc: int, open_count: int
+) -> str:
+    sign = "+" if realised_today_dc >= 0 else "-"
     return (
         "<b>Risk caps</b>\n\n"
-        f"Today's realised P/L: <b>{realised_today/100:+.2f}</b>\n"
-        f"Open exposure: <b>${exposure/100:.2f}</b> across {open_count} position(s)\n\n"
+        f"Today's realised P/L: <b>{sign}${format_dollars(abs(realised_today_dc))}</b>\n"
+        f"Open exposure: <b>${format_dollars(exposure_dc)}</b> across "
+        f"{open_count} position(s)\n\n"
         f"• Daily loss limit — <b>${int(user.get('daily_loss_limit_cents'))/100:.2f}</b>. "
         "Trading pauses for the rest of the UTC day when realised losses reach it.\n"
         f"• Max exposure — <b>${int(user.get('max_exposure_cents'))/100:.2f}</b> of "
@@ -292,19 +297,23 @@ def positions_text(open_trades: list[Trade], recent: list[Trade]) -> str:
         tag = "📝" if t.paper else "⚡"
         direction = "UP" if t.side == "yes" else "DOWN"
         lines.append(
-            f"{tag} <b>{t.coin} {direction}</b> — {t.count} × {t.entry_price}c → "
-            f"target {t.target_price}c\n<code>{t.ticker}</code>"
+            f"{tag} <b>{t.coin} {direction}</b> — {t.count} × "
+            f"{format_cents(t.entry_price_dc)} → target "
+            f"{format_cents(t.target_price_dc or 0)}\n<code>{t.ticker}</code>"
         )
 
     closed = [t for t in recent if t.status != "open"]
     if closed:
         lines += ["", "<b>Recent</b>"]
         for t in closed[:8]:
-            icon = "✅" if (t.pnl_cents or 0) > 0 else ("➖" if not t.pnl_cents else "❌")
+            pnl_dc = t.pnl_dc or 0
+            icon = "✅" if pnl_dc > 0 else ("➖" if pnl_dc == 0 else "❌")
             direction = "UP" if t.side == "yes" else "DOWN"
+            sign = "+" if pnl_dc >= 0 else "-"
             lines.append(
-                f"{icon} {t.coin} {direction} {t.entry_price}c→{t.exit_price}c "
-                f"<b>{(t.pnl_cents or 0)/100:+.2f}</b>"
+                f"{icon} {t.coin} {direction} {format_cents(t.entry_price_dc)}→"
+                f"{format_cents(t.exit_price_dc or 0)} "
+                f"<b>{sign}${format_dollars(abs(pnl_dc))}</b>"
             )
     return "\n".join(lines)
 
@@ -326,13 +335,14 @@ def pnl_text(trades: list[Trade], label: str) -> str:
     def block(name: str, rows: list[Trade]) -> list[str]:
         if not rows:
             return []
-        total = sum(t.pnl_cents or 0 for t in rows)
-        wins = len([t for t in rows if (t.pnl_cents or 0) > 0])
+        total = sum(t.pnl_dc or 0 for t in rows)
+        wins = len([t for t in rows if (t.pnl_dc or 0) > 0])
         rate = wins / len(rows) * 100
+        sign = "+" if total >= 0 else "-"
         return [
             f"<b>{name}</b>",
             f"Trades {len(rows)} · Wins {wins} ({rate:.0f}%)",
-            f"Net <b>{total/100:+.2f}</b>",
+            f"Net <b>{sign}${format_dollars(abs(total))}</b>",
             "",
         ]
 

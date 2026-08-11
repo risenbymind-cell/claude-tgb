@@ -22,6 +22,7 @@ import websockets
 
 from .auth import Signer
 from .orderbook import OrderBook
+from .prices import PriceError, dollars_to_dc, parse_count
 from .rest import KalshiClient
 
 log = logging.getLogger(__name__)
@@ -189,16 +190,23 @@ class MarketFeed:
         book = self.books.setdefault(ticker, OrderBook(ticker))
 
         if kind == "orderbook_snapshot":
+            # Both ladder key spellings are accepted: the websocket emits
+            # `yes_dollars_fp`, the REST snapshot `yes_dollars`.
             book.apply_snapshot(
-                body.get("yes") or [], body.get("no") or [], msg.get("seq")
-            )
-        elif kind == "orderbook_delta":
-            book.apply_delta(
-                body.get("side", "yes"),
-                int(body.get("price", 0)),
-                int(body.get("delta", 0)),
+                body.get("yes_dollars_fp") or body.get("yes_dollars") or body.get("yes"),
+                body.get("no_dollars_fp") or body.get("no_dollars") or body.get("no"),
                 msg.get("seq"),
             )
+        elif kind == "orderbook_delta":
+            try:
+                price_dc = dollars_to_dc(
+                    body.get("price_dollars", body.get("price"))
+                )
+                delta = parse_count(body.get("delta_fp", body.get("delta", 0)))
+            except PriceError:
+                log.debug("Unparseable delta frame for %s", ticker)
+                return
+            book.apply_delta(body.get("side", "yes"), price_dc, delta, msg.get("seq"))
 
     # ---------------- REST fallback ----------------
 
@@ -219,9 +227,9 @@ class MarketFeed:
                 log.debug("Order book poll failed for %s: %s", ticker, result)
 
     async def _poll_one(self, ticker: str) -> None:
-        data = await self.rest.get_orderbook(ticker)
+        yes, no = await self.rest.get_orderbook(ticker)
         book = self.books.setdefault(ticker, OrderBook(ticker))
-        book.apply_snapshot(data.get("yes") or [], data.get("no") or [])
+        book.apply_snapshot(yes, no)
 
 
 class BookHistory:
@@ -245,7 +253,7 @@ class BookHistory:
             series.pop(0)
 
     def change_over(self, ticker: str, seconds: float, now: float | None = None) -> float | None:
-        """Change in fair value over the last `seconds`, in cents."""
+        """Change in fair value over the last `seconds`, in deci-cents."""
         series = self._points.get(ticker)
         if not series or len(series) < 2:
             return None

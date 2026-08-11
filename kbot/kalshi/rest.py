@@ -1,4 +1,15 @@
-"""Thin async REST client for the Kalshi trade API."""
+"""Thin async REST client for the Kalshi trade API.
+
+Order placement uses the V2 event-market endpoints (`/portfolio/events/orders`).
+The legacy `/portfolio/orders` POST is rejected outright by the exchange with
+`deprecated_v1_order_endpoint`, so there is no fallback to keep.
+
+The V2 order API models a binary market as a **single book quoted in YES
+terms**: `bid` buys YES, `ask` sells YES (economically, buying NO at the
+mirrored price). This module is where that translation happens — the rest of the
+bot speaks in "buy the yes side" / "buy the no side", which is what the strategy
+and the dashboard mean.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +21,13 @@ from typing import Any
 import httpx
 
 from .auth import Signer
+from .prices import (
+    complement,
+    count_to_fp,
+    dc_to_dollars,
+    dollars_to_dc,
+    parse_count,
+)
 
 log = logging.getLogger(__name__)
 
@@ -108,18 +126,34 @@ class KalshiClient:
         data = await self._request("GET", f"/markets/{ticker}")
         return data.get("market", data)
 
-    async def get_orderbook(self, ticker: str, depth: int = 10) -> dict[str, Any]:
+    async def get_series_list(self, category: str = "Crypto") -> list[dict[str, Any]]:
+        data = await self._request("GET", "/series", params={"category": category})
+        return data.get("series", [])
+
+    async def get_orderbook(self, ticker: str, depth: int = 10) -> tuple[Any, Any]:
+        """Return the raw (yes, no) bid ladders for a market.
+
+        The response has moved between shapes — `orderbook_fp.yes_dollars` is
+        current, `orderbook.yes` is the legacy form — so both are accepted and
+        handed to the book parser as-is.
+        """
         data = await self._request(
             "GET", f"/markets/{ticker}/orderbook", params={"depth": depth}
         )
-        return data.get("orderbook", data)
+        book = data.get("orderbook_fp") or data.get("orderbook") or data
+        yes = book.get("yes_dollars_fp") or book.get("yes_dollars") or book.get("yes")
+        no = book.get("no_dollars_fp") or book.get("no_dollars") or book.get("no")
+        return yes, no
 
     # ---------------- portfolio ----------------
 
     async def get_balance(self) -> int:
-        """Available balance in cents."""
+        """Available balance in deci-cents."""
         data = await self._request("GET", "/portfolio/balance")
-        return int(data.get("balance", 0))
+        if "balance_dollars" in data:
+            return dollars_to_dc(data["balance_dollars"])
+        # Legacy field is in whole cents.
+        return int(data.get("balance", 0)) * 10
 
     async def get_positions(self) -> list[dict[str, Any]]:
         data = await self._request("GET", "/portfolio/positions")
@@ -136,39 +170,79 @@ class KalshiClient:
         data = await self._request("GET", "/portfolio/fills", params=params)
         return data.get("fills", [])
 
+    # ---------------- orders (V2) ----------------
+
+    @staticmethod
+    def _to_book_side(side: str, action: str) -> str:
+        """Map our (side, action) onto the V2 single-book bid/ask side.
+
+        Buying YES and selling NO both add demand for YES, so both are `bid`;
+        selling YES and buying NO are both `ask`.
+        """
+        buying = action == "buy"
+        if side == "yes":
+            return "bid" if buying else "ask"
+        return "ask" if buying else "bid"
+
+    @staticmethod
+    def _to_book_price_dc(side: str, price_dc: int) -> int:
+        """Convert a price on our side into the YES-quoted book price."""
+        return int(price_dc) if side == "yes" else complement(int(price_dc))
+
     async def create_order(
         self,
         *,
         ticker: str,
         action: str,  # "buy" | "sell"
-        side: str,  # "yes" | "no"
+        side: str,  # "yes" | "no" — the side we are trading
         count: int,
-        price: int | None = None,
-        order_type: str = "limit",
-        time_in_force: str | None = None,
+        price_dc: int,
+        time_in_force: str = "immediate_or_cancel",
         client_order_id: str | None = None,
+        post_only: bool = False,
     ) -> dict[str, Any]:
+        """Place an order, returning a normalised result.
+
+        Returns `{order_id, fill_count, remaining_count, avg_price_dc}` with
+        prices converted back onto the side we asked for, so callers never see
+        the YES-quoted book price.
+        """
         body: dict[str, Any] = {
             "ticker": ticker,
-            "action": action,
-            "side": side,
-            "count": int(count),
-            "type": order_type,
+            "side": self._to_book_side(side, action),
+            "count": count_to_fp(count),
+            "price": dc_to_dollars(self._to_book_price_dc(side, price_dc)),
+            "time_in_force": time_in_force,
+            # The exchange requires an explicit self-trade policy. `taker_at_cross`
+            # cancels our resting order rather than trading against ourselves,
+            # which is the right call for a bot that may hold a resting exit on
+            # the same market it is entering.
+            "self_trade_prevention_type": "taker_at_cross",
             "client_order_id": client_order_id or str(uuid.uuid4()),
         }
-        if order_type == "limit":
-            if price is None:
-                raise ValueError("limit orders require a price")
-            # Kalshi prices the order on the side you are trading.
-            body["yes_price" if side == "yes" else "no_price"] = int(price)
-        if time_in_force:
-            body["time_in_force"] = time_in_force
+        if post_only:
+            body["post_only"] = True
 
-        data = await self._request("POST", "/portfolio/orders", json_body=body)
-        return data.get("order", data)
+        data = await self._request("POST", "/portfolio/events/orders", json_body=body)
+
+        fill_count = parse_count(data.get("fill_count", 0))
+        avg_price_dc: int | None = None
+        if data.get("average_fill_price") is not None and fill_count > 0:
+            book_price_dc = dollars_to_dc(data["average_fill_price"])
+            # Translate the YES-quoted fill back onto our side.
+            avg_price_dc = self._to_book_price_dc(side, book_price_dc)
+
+        return {
+            "order_id": data.get("order_id"),
+            "client_order_id": data.get("client_order_id"),
+            "fill_count": fill_count,
+            "remaining_count": parse_count(data.get("remaining_count", 0)),
+            "avg_price_dc": avg_price_dc,
+            "raw": data,
+        }
 
     async def cancel_order(self, order_id: str) -> dict[str, Any]:
-        return await self._request("DELETE", f"/portfolio/orders/{order_id}")
+        return await self._request("DELETE", f"/portfolio/events/orders/{order_id}")
 
     async def ping(self) -> bool:
         """Cheap authenticated call used to validate a user's credentials."""

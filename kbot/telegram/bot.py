@@ -13,6 +13,7 @@ from ..config import Settings
 from ..engine.risk import RiskManager, start_of_utc_day
 from ..engine.runner import Engine
 from ..kalshi.auth import InvalidPrivateKey, Signer
+from ..kalshi.prices import format_cents, format_dollars
 from ..kalshi.rest import KalshiClient, KalshiError
 from ..storage import DEFAULT_SETTINGS, TIERS, Storage, User
 from ..strategy import REGISTRY
@@ -285,7 +286,7 @@ class Bot:
             market = markets[coin]
             book = self.engine.feed.book(market.ticker)
             secs = max(0, int(market.seconds_to_close()))
-            mid = f"{book.mid:.1f}c" if book and book.mid is not None else "—"
+            mid = format_cents(round(book.mid)) if book and book.mid is not None else "—"
             lines.append(
                 f"{coin}: YES mid {mid} · closes in {secs // 60}m {secs % 60:02d}s"
             )
@@ -413,7 +414,7 @@ class Bot:
         await self.storage.set_credentials(user.tg_id, key_id, pem)
         await self.tg.send_message(
             user.tg_id,
-            f"✅ Connected. Kalshi balance: <b>${balance/100:.2f}</b>\n\n"
+            f"✅ Connected. Kalshi balance: <b>${format_dollars(balance)}</b>\n\n"
             "Your private key is encrypted at rest. Switch to <b>Live</b> on the "
             "dashboard when you're ready — or stay in paper mode as long as you like.",
         )
@@ -566,8 +567,8 @@ class Bot:
             return (
                 ui.risk_text(
                     user,
-                    snap.realised_today_cents,
-                    snap.open_exposure_cents,
+                    snap.realised_today_dc,
+                    snap.open_exposure_dc,
                     snap.open_positions,
                 ),
                 ui.risk_keyboard(user),

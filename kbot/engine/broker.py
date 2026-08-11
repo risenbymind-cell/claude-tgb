@@ -4,6 +4,9 @@
 is written once and the only difference between a simulation and a real order is
 which object it holds. That is what makes paper mode trustworthy: it is not a
 separate code path, it is the same code path with a different broker.
+
+All prices crossing this boundary are integer deci-cents (see
+`kalshi/prices.py`).
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from ..kalshi.orderbook import OrderBook
+from ..kalshi.prices import format_cents
 from ..kalshi.rest import KalshiClient, KalshiError
 
 log = logging.getLogger(__name__)
@@ -25,7 +29,7 @@ class OrderResult:
     ok: bool
     order_id: str | None = None
     filled: int = 0
-    price: int | None = None
+    price_dc: int | None = None
     error: str | None = None
 
 
@@ -35,11 +39,11 @@ class Broker(Protocol):
     async def balance(self) -> int | None: ...
 
     async def buy(
-        self, ticker: str, side: str, count: int, price: int, book: OrderBook | None
+        self, ticker: str, side: str, count: int, price_dc: int, book: OrderBook | None
     ) -> OrderResult: ...
 
     async def sell(
-        self, ticker: str, side: str, count: int, price: int, book: OrderBook | None
+        self, ticker: str, side: str, count: int, price_dc: int, book: OrderBook | None
     ) -> OrderResult: ...
 
 
@@ -61,21 +65,22 @@ class PaperBroker:
         return None  # paper mode is not balance-constrained
 
     async def buy(
-        self, ticker: str, side: str, count: int, price: int, book: OrderBook | None
+        self, ticker: str, side: str, count: int, price_dc: int, book: OrderBook | None
     ) -> OrderResult:
         if book is None or book.is_stale:
             return OrderResult(ok=False, error="no live book to fill against")
         ask = book.best_ask(side)
         if ask is None:
             return OrderResult(ok=False, error="no offer on that side")
-        if price < ask:
-            return OrderResult(ok=False, error=f"limit {price}c below ask {ask}c")
+        if price_dc < ask:
+            return OrderResult(
+                ok=False,
+                error=f"limit {format_cents(price_dc)} below ask {format_cents(ask)}",
+            )
 
-        # Size available at the touch is the opposing side's resting bid at the
-        # mirrored price.
-        opposite = "no" if side == "yes" else "yes"
-        available = (book.no if opposite == "no" else book.yes).get(100 - ask, 0)
-        filled = min(count, available) if available else count
+        available = book.size_at_ask(side)
+        # Only whole contracts are ever placed, so a partial level rounds down.
+        filled = int(min(count, available)) if available else 0
         if filled < 1:
             return OrderResult(ok=False, error="no size at the offer")
 
@@ -84,24 +89,24 @@ class PaperBroker:
             "ticker": ticker,
             "side": side,
             "count": filled,
-            "price": ask,
+            "price_dc": ask,
             "ts": time.time(),
         }
-        return OrderResult(ok=True, order_id=order_id, filled=filled, price=ask)
+        return OrderResult(ok=True, order_id=order_id, filled=filled, price_dc=ask)
 
     async def sell(
-        self, ticker: str, side: str, count: int, price: int, book: OrderBook | None
+        self, ticker: str, side: str, count: int, price_dc: int, book: OrderBook | None
     ) -> OrderResult:
         order_id = f"paper-{uuid.uuid4().hex[:12]}"
         self.orders[order_id] = {
             "ticker": ticker,
             "side": side,
             "count": count,
-            "price": price,
+            "price_dc": price_dc,
             "resting": True,
             "ts": time.time(),
         }
-        return OrderResult(ok=True, order_id=order_id, filled=0, price=price)
+        return OrderResult(ok=True, order_id=order_id, filled=0, price_dc=price_dc)
 
 
 class LiveBroker:
@@ -120,7 +125,7 @@ class LiveBroker:
             return None
 
     async def buy(
-        self, ticker: str, side: str, count: int, price: int, book: OrderBook | None
+        self, ticker: str, side: str, count: int, price_dc: int, book: OrderBook | None
     ) -> OrderResult:
         try:
             order = await self.client.create_order(
@@ -128,8 +133,7 @@ class LiveBroker:
                 action="buy",
                 side=side,
                 count=count,
-                price=price,
-                order_type="limit",
+                price_dc=price_dc,
                 # Immediate-or-cancel: we want the edge now or not at all. A
                 # resting entry that fills a minute later is a different trade
                 # from the one the strategy signalled.
@@ -138,13 +142,7 @@ class LiveBroker:
         except KalshiError as exc:
             return OrderResult(ok=False, error=str(exc))
 
-        filled = int(order.get("taker_fill_count") or order.get("count") or 0)
-        fill_price = order.get("taker_fill_cost")
-        if filled and fill_price:
-            # taker_fill_cost is the total in cents; convert back to per-contract.
-            price_each = int(round(int(fill_price) / filled))
-        else:
-            price_each = price
+        filled = int(order["fill_count"])
         if filled < 1:
             return OrderResult(
                 ok=False,
@@ -152,11 +150,14 @@ class LiveBroker:
                 error="order did not fill at the limit",
             )
         return OrderResult(
-            ok=True, order_id=order.get("order_id"), filled=filled, price=price_each
+            ok=True,
+            order_id=order.get("order_id"),
+            filled=filled,
+            price_dc=order.get("avg_price_dc") or price_dc,
         )
 
     async def sell(
-        self, ticker: str, side: str, count: int, price: int, book: OrderBook | None
+        self, ticker: str, side: str, count: int, price_dc: int, book: OrderBook | None
     ) -> OrderResult:
         try:
             order = await self.client.create_order(
@@ -164,9 +165,14 @@ class LiveBroker:
                 action="sell",
                 side=side,
                 count=count,
-                price=price,
-                order_type="limit",
+                price_dc=price_dc,
+                time_in_force="good_till_canceled",
             )
         except KalshiError as exc:
             return OrderResult(ok=False, error=str(exc))
-        return OrderResult(ok=True, order_id=order.get("order_id"), price=price)
+        return OrderResult(
+            ok=True,
+            order_id=order.get("order_id"),
+            filled=int(order["fill_count"]),
+            price_dc=price_dc,
+        )

@@ -26,14 +26,17 @@ def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
 
 @dataclass
 class Filters:
-    """Conditions that disqualify a market regardless of signal strength."""
+    """Conditions that disqualify a market regardless of signal strength.
 
-    max_spread: int = 6  # cents; wider than this and the round trip eats the edge
-    min_depth: int = 20  # contracts resting across the top levels
+    Prices are in deci-cents (1000 = $1.00), matching the order book.
+    """
+
+    max_spread: int = 60  # 6c; wider and the round trip eats the edge
+    min_depth: float = 20  # contracts resting across the top levels
     min_seconds_left: float = 90.0  # no entries into the close
     max_seconds_left: float = 780.0  # let the window establish a direction first
-    min_price: int = 20  # avoid lottery tickets
-    max_price: int = 80  # and avoid paying near-certainty prices
+    min_price: int = 200  # 20c — avoid lottery tickets
+    max_price: int = 800  # 80c — and avoid paying near-certainty prices
     max_book_age_s: float = 8.0  # a stale book is not a live book
     min_samples: int = 5  # need history before trusting momentum
 
@@ -73,9 +76,10 @@ class DirectionalStrategy:
     name = "directional"
     description = "Momentum — trades with book imbalance and short-horizon drift."
 
-    # Normalisers: the move size at which a component counts as "full strength".
-    DRIFT_FULL_SCALE = 4.0  # cents over 20s
-    IMPULSE_FULL_SCALE = 1.5  # cents over 5s
+    # Normalisers: the move size at which a component counts as "full strength",
+    # in deci-cents.
+    DRIFT_FULL_SCALE = 40.0  # 4c over 20s
+    IMPULSE_FULL_SCALE = 15.0  # 1.5c over 5s
     IMBALANCE_WEIGHT = 0.40
     DRIFT_WEIGHT = 0.35
     IMPULSE_WEIGHT = 0.25
@@ -129,10 +133,10 @@ class DirectionalStrategy:
             ticker=ctx.ticker,
             side=side,
             confidence=confidence,
-            price=price,
+            price_dc=price,
             reason=(
                 f"imbalance {components['imbalance']:+.2f}, "
-                f"20s drift {drift:+.1f}c, 5s impulse {impulse:+.1f}c"
+                f"20s drift {drift/10:+.1f}c, 5s impulse {impulse/10:+.1f}c"
             ),
             detail={
                 "score": score,
@@ -157,7 +161,7 @@ class FadeStrategy:
     name = "fade"
     description = "Mean reversion — fades overextended late-window moves."
 
-    OVEREXTENSION_CENTS = 6.0  # 60s move that qualifies as stretched
+    OVEREXTENSION_DC = 60.0  # a 6c move over 60s qualifies as stretched
     MAX_CONFIRMING_IMBALANCE = 0.15  # book must not agree with the move
     MIN_SCORE = 0.35
 
@@ -174,14 +178,14 @@ class FadeStrategy:
         imbalance = book.imbalance()
         if move is None or imbalance is None:
             return None
-        if abs(move) < self.OVEREXTENSION_CENTS:
+        if abs(move) < self.OVEREXTENSION_DC:
             return None
         # If the book is leaning the same way as the move, it is not an
         # overshoot — it is a trend, and this is the wrong strategy for it.
         if imbalance * move > 0 and abs(imbalance) > self.MAX_CONFIRMING_IMBALANCE:
             return None
 
-        score = _clamp(abs(move) / (2 * self.OVEREXTENSION_CENTS)) * (
+        score = _clamp(abs(move) / (2 * self.OVEREXTENSION_DC)) * (
             1 - _clamp(abs(imbalance))
         )
         if score < self.MIN_SCORE:
@@ -198,8 +202,8 @@ class FadeStrategy:
             ticker=ctx.ticker,
             side=side,
             confidence=_clamp(score),
-            price=price,
-            reason=f"60s move {move:+.1f}c unconfirmed by book ({imbalance:+.2f})",
+            price_dc=price,
+            reason=f"60s move {move/10:+.1f}c unconfirmed by book ({imbalance:+.2f})",
             detail={
                 "score": score,
                 "move_60s": move,

@@ -23,8 +23,8 @@ class MarketContext:
     book: OrderBook
     seconds_to_close: float
     window_seconds: float
-    # Fair-value change over the trailing N seconds, in cents. None until there
-    # is enough history.
+    # Fair-value change over the trailing N seconds, in deci-cents. None until
+    # there is enough history.
     fv_change_5s: float | None = None
     fv_change_20s: float | None = None
     fv_change_60s: float | None = None
@@ -52,7 +52,7 @@ class Signal:
     ticker: str
     side: str
     confidence: float
-    price: int  # the ask we would pay, in cents
+    price_dc: int  # the ask we would pay, in deci-cents
     reason: str
     detail: dict[str, float] = field(default_factory=dict)
 

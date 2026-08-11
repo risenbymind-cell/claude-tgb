@@ -57,10 +57,66 @@ def cmd_markets() -> int:
     return 0
 
 
+def cmd_series() -> int:
+    """Re-derive the 15-minute series map from the live API.
+
+    Kalshi adds and renames series, so rather than trusting the built-in
+    defaults forever, this asks the exchange which crypto series actually have a
+    `fifteen_min` frequency and prints a KALSHI_SERIES value you can paste
+    straight into .env.
+    """
+    import json
+    import re
+
+    from .config import load_settings
+    from .kalshi.rest import KalshiClient
+
+    settings = load_settings()
+
+    async def run() -> None:
+        client = KalshiClient(settings.rest_base)
+        try:
+            series = await client.get_series_list("Crypto")
+        finally:
+            await client.aclose()
+
+        found: dict[str, str] = {}
+        for entry in series:
+            if entry.get("frequency") != "fifteen_min":
+                continue
+            ticker = entry.get("ticker") or ""
+            # KX<COIN>15M -> COIN. Multi-coin series (KXCRYPTOLEAD15M and
+            # friends) are not up/down markets, so they are skipped.
+            match = re.fullmatch(r"KX([A-Z0-9]+)15M", ticker)
+            if not match:
+                continue
+            coin = match.group(1)
+            if coin.startswith("CRYPTO"):
+                continue
+            found[coin] = ticker
+
+        if not found:
+            print("No fifteen_min crypto series found.")
+            return
+
+        configured = settings.series
+        for coin in sorted(found):
+            mark = " " if configured.get(coin) == found[coin] else "*"
+            print(f"{mark} {coin:<6} {found[coin]}")
+        missing = sorted(set(configured) - set(found))
+        if missing:
+            print(f"\nConfigured but not found: {', '.join(missing)}")
+        print("\nKALSHI_SERIES=" + json.dumps(found, separators=(",", ":")))
+
+    asyncio.run(run())
+    return 0
+
+
 COMMANDS = {
     "genkey": cmd_genkey,
     "mintkeys": cmd_mintkeys,
     "markets": cmd_markets,
+    "series": cmd_series,
 }
 
 

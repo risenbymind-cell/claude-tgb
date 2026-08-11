@@ -16,23 +16,33 @@ ROOT = Path(__file__).resolve().parent.parent
 # Kalshi hosts. The demo host is a full paper-trading environment run by Kalshi
 # itself; `paper mode` in this bot is a separate, purely local simulation that
 # needs no credentials at all.
-PROD_REST = "https://api.elections.kalshi.com/trade-api/v2"
-PROD_WS = "wss://api.elections.kalshi.com/trade-api/ws/v2"
-DEMO_REST = "https://demo-api.kalshi.co/trade-api/v2"
-DEMO_WS = "wss://demo-api.kalshi.co/trade-api/ws/v2"
+# `external-api` are the hosts Kalshi recommends for API traders; the older
+# shared hosts remain supported but are not preferred.
+PROD_REST = "https://external-api.kalshi.com/trade-api/v2"
+PROD_WS = "wss://external-api-ws.kalshi.com/trade-api/ws/v2"
+DEMO_REST = "https://external-api.demo.kalshi.co/trade-api/v2"
+DEMO_WS = "wss://external-api-ws.demo.kalshi.co/trade-api/ws/v2"
 
-# Series tickers for the 15-minute up/down crypto markets. Kalshi renames and
-# adds series over time, so these are overridable via KALSHI_SERIES (JSON) and
-# every one of them is verified against the API at discovery time rather than
-# trusted blindly.
+# Series tickers for the 15-minute up/down crypto markets ("<COIN> price up in
+# next 15 mins?"). These are the `15M` series — the similarly-named `KX<COIN>D`
+# series are the *hourly* directional markets, not these.
+#
+# Kalshi adds and renames series over time, so this map is overridable via
+# KALSHI_SERIES (JSON), and `python -m kbot.tools series` re-derives it from the
+# live API by looking for series whose frequency is `fifteen_min`.
 DEFAULT_SERIES: dict[str, str] = {
-    "BTC": "KXBTCD",
-    "ETH": "KXETHD",
-    "SOL": "KXSOLD",
-    "XRP": "KXXRPD",
-    "DOGE": "KXDOGED",
-    "BNB": "KXBNBD",
-    "HYPE": "KXHYPED",
+    "BTC": "KXBTC15M",
+    "ETH": "KXETH15M",
+    "SOL": "KXSOL15M",
+    "XRP": "KXXRP15M",
+    "DOGE": "KXDOGE15M",
+    "BNB": "KXBNB15M",
+    "HYPE": "KXHYPE15M",
+    "NEAR": "KXNEAR15M",
+    "ZEC": "KXZEC15M",
+    "ADA": "KXADA15M",
+    "BCH": "KXBCH15M",
+    "TON": "KXTON15M",
 }
 
 # Spot reference feeds, used only as an optional strategy input. Coins without a
@@ -43,6 +53,10 @@ DEFAULT_SPOT_PRODUCTS: dict[str, str] = {
     "SOL": "SOL-USD",
     "XRP": "XRP-USD",
     "DOGE": "DOGE-USD",
+    "NEAR": "NEAR-USD",
+    "ZEC": "ZEC-USD",
+    "ADA": "ADA-USD",
+    "BCH": "BCH-USD",
 }
 
 

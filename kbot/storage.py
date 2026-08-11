@@ -49,14 +49,14 @@ CREATE TABLE IF NOT EXISTS trades (
     coin            TEXT NOT NULL,
     side            TEXT NOT NULL,
     count           INTEGER NOT NULL,
-    entry_price     INTEGER NOT NULL,
-    exit_price      INTEGER,
-    target_price    INTEGER,
+    entry_price_dc  INTEGER NOT NULL,
+    exit_price_dc   INTEGER,
+    target_price_dc INTEGER,
     status          TEXT NOT NULL,
     paper           INTEGER NOT NULL,
     opened_at       REAL NOT NULL,
     closed_at       REAL,
-    pnl_cents       INTEGER,
+    pnl_dc          INTEGER,
     entry_order_id  TEXT,
     exit_order_id   TEXT,
     reason          TEXT
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS signals (
     coin        TEXT NOT NULL,
     side        TEXT NOT NULL,
     confidence  REAL NOT NULL,
-    price       INTEGER NOT NULL,
+    price_dc    INTEGER NOT NULL,
     created_at  REAL NOT NULL,
     detail      TEXT
 );
@@ -131,14 +131,14 @@ class Trade:
     coin: str
     side: str
     count: int
-    entry_price: int
-    exit_price: int | None
-    target_price: int | None
+    entry_price_dc: int
+    exit_price_dc: int | None
+    target_price_dc: int | None
     status: str  # "open" | "closed" | "expired"
     paper: bool
     opened_at: float
     closed_at: float | None
-    pnl_cents: int | None
+    pnl_dc: int | None
     entry_order_id: str | None
     exit_order_id: str | None
     reason: str | None
@@ -390,16 +390,16 @@ class Storage:
         coin: str,
         side: str,
         count: int,
-        entry_price: int,
-        target_price: int | None,
+        entry_price_dc: int,
+        target_price_dc: int | None,
         paper: bool,
         entry_order_id: str | None,
         reason: str | None,
     ) -> int:
         def work() -> int:
             cur = self._conn.execute(
-                "INSERT INTO trades (tg_id, ticker, coin, side, count, entry_price,"
-                " target_price, status, paper, opened_at, entry_order_id, reason)"
+                "INSERT INTO trades (tg_id, ticker, coin, side, count, entry_price_dc,"
+                " target_price_dc, status, paper, opened_at, entry_order_id, reason)"
                 " VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)",
                 (
                     tg_id,
@@ -407,8 +407,8 @@ class Storage:
                     coin,
                     side,
                     count,
-                    entry_price,
-                    target_price,
+                    entry_price_dc,
+                    target_price_dc,
                     1 if paper else 0,
                     time.time(),
                     entry_order_id,
@@ -424,7 +424,7 @@ class Storage:
         self,
         trade_id: int,
         *,
-        exit_price: int,
+        exit_price_dc: int,
         status: str = "closed",
         exit_order_id: str | None = None,
     ) -> Trade | None:
@@ -434,12 +434,12 @@ class Storage:
             ).fetchone()
             if row is None or row["status"] != "open":
                 return None
-            pnl = (exit_price - row["entry_price"]) * row["count"]
+            pnl = (exit_price_dc - row["entry_price_dc"]) * row["count"]
             self._conn.execute(
-                "UPDATE trades SET exit_price = ?, status = ?, closed_at = ?,"
-                " pnl_cents = ?, exit_order_id = COALESCE(?, exit_order_id)"
+                "UPDATE trades SET exit_price_dc = ?, status = ?, closed_at = ?,"
+                " pnl_dc = ?, exit_order_id = COALESCE(?, exit_order_id)"
                 " WHERE id = ?",
-                (exit_price, status, time.time(), pnl, exit_order_id, trade_id),
+                (exit_price_dc, status, time.time(), pnl, exit_order_id, trade_id),
             )
             self._conn.commit()
             return _row_to_trade(
@@ -498,14 +498,20 @@ class Storage:
         return await self._run(work)
 
     async def record_signal(
-        self, ticker: str, coin: str, side: str, confidence: float, price: int, detail: str
+        self,
+        ticker: str,
+        coin: str,
+        side: str,
+        confidence: float,
+        price_dc: int,
+        detail: str,
     ) -> None:
         await self._run(
             lambda: (
                 self._conn.execute(
-                    "INSERT INTO signals (ticker, coin, side, confidence, price,"
+                    "INSERT INTO signals (ticker, coin, side, confidence, price_dc,"
                     " created_at, detail) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    (ticker, coin, side, confidence, price, time.time(), detail),
+                    (ticker, coin, side, confidence, price_dc, time.time(), detail),
                 ),
                 self._conn.commit(),
             )
@@ -520,14 +526,14 @@ def _row_to_trade(row: sqlite3.Row) -> Trade:
         coin=row["coin"],
         side=row["side"],
         count=row["count"],
-        entry_price=row["entry_price"],
-        exit_price=row["exit_price"],
-        target_price=row["target_price"],
+        entry_price_dc=row["entry_price_dc"],
+        exit_price_dc=row["exit_price_dc"],
+        target_price_dc=row["target_price_dc"],
         status=row["status"],
         paper=bool(row["paper"]),
         opened_at=row["opened_at"],
         closed_at=row["closed_at"],
-        pnl_cents=row["pnl_cents"],
+        pnl_dc=row["pnl_dc"],
         entry_order_id=row["entry_order_id"],
         exit_order_id=row["exit_order_id"],
         reason=row["reason"],

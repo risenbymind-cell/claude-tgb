@@ -15,6 +15,7 @@ from kbot.config import Settings
 from kbot.engine.discovery import LiveMarket
 from kbot.engine.runner import Engine
 from kbot.kalshi.orderbook import OrderBook
+from kbot.kalshi.prices import dc_to_dollars
 from kbot.storage import Storage
 
 
@@ -25,7 +26,7 @@ def make_settings(tmp_path) -> Settings:
         master_key=Fernet.generate_key().decode(),
         db_path=tmp_path / "engine.sqlite3",
         demo=True,
-        series={"BTC": "KXBTCD"},
+        series={"BTC": "KXBTC15M"},
         spot_products={},
     )
 
@@ -53,7 +54,7 @@ class Harness:
         now = time.time()
         market = LiveMarket(
             coin="BTC",
-            ticker="KXBTCD-NOW",
+            ticker="KXBTC15M-NOW",
             title="BTC up or down",
             open_time=now - (900 - seconds_left),
             close_time=now + seconds_left,
@@ -61,10 +62,14 @@ class Harness:
         self.engine.discovery.markets = {"BTC": market}
         return market
 
-    def set_book(self, yes_depth=250, no_depth=60, yes_bid=45, no_bid=52):
-        book = OrderBook("KXBTCD-NOW")
-        book.apply_snapshot(yes=[[yes_bid, yes_depth]], no=[[no_bid, no_depth]])
-        self.engine.feed.books["KXBTCD-NOW"] = book
+    def set_book(self, yes_depth=250, no_depth=60, yes_bid_dc=450, no_bid_dc=520):
+        """Prices are deci-cents; emitted in the wire format the API uses."""
+        book = OrderBook("KXBTC15M-NOW")
+        book.apply_snapshot(
+            yes=[[dc_to_dollars(yes_bid_dc), f"{yes_depth}.00"]],
+            no=[[dc_to_dollars(no_bid_dc), f"{no_depth}.00"]],
+        )
+        self.engine.feed.books["KXBTC15M-NOW"] = book
         return book
 
     def seed_rising_history(self):
@@ -72,7 +77,7 @@ class Harness:
         now = time.time()
         for i in range(40):
             self.engine.history.observe(
-                "KXBTCD-NOW", 40.0 + i * 0.2, now - (40 - i) * 1.5
+                "KXBTC15M-NOW", 400.0 + i * 2.0, now - (40 - i) * 1.5
             )
 
     async def close(self):
@@ -116,8 +121,8 @@ async def test_auto_mode_opens_a_paper_position(harness):
     assert trade.paper is True
     assert trade.side == "yes"
     assert trade.count == 2
-    assert trade.entry_price == 48  # 100 - best NO bid
-    assert trade.target_price == 48 + 8  # default profit_cents
+    assert trade.entry_price_dc == 480  # $1.00 - best NO bid
+    assert trade.target_price_dc == 480 + 80  # default profit_cents (8c)
     assert trade.exit_order_id is not None  # exit resting immediately
     assert "PAPER" in harness.messages[0][1]
 
@@ -200,15 +205,19 @@ async def test_position_closes_when_the_target_is_bid(harness):
 
     trade = (await harness.storage.open_trades(1))[0]
     # Someone now bids at our target on the YES side.
-    harness.set_book(yes_bid=trade.target_price, no_bid=100 - trade.target_price - 1)
+    harness.set_book(
+        yes_bid_dc=trade.target_price_dc, no_bid_dc=1000 - trade.target_price_dc - 10
+    )
 
     await harness.engine._manage_positions()
 
     assert await harness.storage.open_trades(1) == []
     closed = (await harness.storage.trades_since(1, 0))[0]
     assert closed.status == "closed"
-    assert closed.exit_price == trade.target_price
-    assert closed.pnl_cents == (trade.target_price - trade.entry_price) * trade.count
+    assert closed.exit_price_dc == trade.target_price_dc
+    assert closed.pnl_dc == (
+        trade.target_price_dc - trade.entry_price_dc
+    ) * trade.count
     assert "✅" in harness.messages[-1][1]
 
 
@@ -220,7 +229,7 @@ async def test_position_stays_open_below_the_target(harness):
     await harness.engine._tick()
 
     trade = (await harness.storage.open_trades(1))[0]
-    harness.set_book(yes_bid=trade.target_price - 3)
+    harness.set_book(yes_bid_dc=trade.target_price_dc - 30)
 
     await harness.engine._manage_positions()
 
@@ -248,8 +257,8 @@ async def test_expired_window_settles_from_the_market_result(harness):
 
     closed = (await harness.storage.trades_since(1, 0))[0]
     assert closed.status == "expired"
-    assert closed.exit_price == 0  # held YES, market settled NO
-    assert closed.pnl_cents == -trade.entry_price * trade.count
+    assert closed.exit_price_dc == 0  # held YES, market settled NO
+    assert closed.pnl_dc == -trade.entry_price_dc * trade.count
     assert "❌" in harness.messages[-1][1]
 
 

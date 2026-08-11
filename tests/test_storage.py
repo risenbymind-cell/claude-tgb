@@ -121,21 +121,21 @@ async def test_trade_lifecycle_computes_pnl(storage):
     await storage.upsert_user(1, "trader")
     trade_id = await storage.record_entry(
         tg_id=1,
-        ticker="KXBTCD-1",
+        ticker="KXBTC15M-1",
         coin="BTC",
         side="yes",
         count=3,
-        entry_price=45,
-        target_price=53,
+        entry_price_dc=450,
+        target_price_dc=530,
         paper=True,
         entry_order_id="o1",
         reason="test",
     )
     assert len(await storage.open_trades(1)) == 1
 
-    closed = await storage.close_trade(trade_id, exit_price=53)
+    closed = await storage.close_trade(trade_id, exit_price_dc=530)
     assert closed is not None
-    assert closed.pnl_cents == (53 - 45) * 3
+    assert closed.pnl_dc == (530 - 450) * 3
     assert closed.status == "closed"
     assert await storage.open_trades(1) == []
 
@@ -145,18 +145,18 @@ async def test_closing_twice_is_a_no_op(storage):
     await storage.upsert_user(1, "trader")
     trade_id = await storage.record_entry(
         tg_id=1,
-        ticker="KXBTCD-1",
+        ticker="KXBTC15M-1",
         coin="BTC",
         side="yes",
         count=1,
-        entry_price=40,
-        target_price=50,
+        entry_price_dc=400,
+        target_price_dc=500,
         paper=True,
         entry_order_id=None,
         reason=None,
     )
-    assert await storage.close_trade(trade_id, exit_price=50) is not None
-    assert await storage.close_trade(trade_id, exit_price=10) is None
+    assert await storage.close_trade(trade_id, exit_price_dc=500) is not None
+    assert await storage.close_trade(trade_id, exit_price_dc=100) is None
 
 
 @pytest.mark.asyncio
@@ -164,12 +164,12 @@ async def test_trades_since_filters_by_time(storage):
     await storage.upsert_user(1, "trader")
     await storage.record_entry(
         tg_id=1,
-        ticker="KXBTCD-1",
+        ticker="KXBTC15M-1",
         coin="BTC",
         side="yes",
         count=1,
-        entry_price=40,
-        target_price=50,
+        entry_price_dc=400,
+        target_price_dc=500,
         paper=True,
         entry_order_id=None,
         reason=None,
