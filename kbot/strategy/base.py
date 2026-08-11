@@ -29,6 +29,11 @@ class MarketContext:
     fv_change_20s: float | None = None
     fv_change_60s: float | None = None
     samples: int = 0
+    #: How stale the book is, in seconds. Supplied by the caller rather than
+    #: read from the wall clock, because during a replay "now" is the recorded
+    #: timestamp — measuring against real time would reject every historical
+    #: snapshot as stale and silently produce an empty backtest.
+    book_age_s: float = 0.0
     spot: float | None = None
     spot_change_pct: float | None = None
     title: str = ""

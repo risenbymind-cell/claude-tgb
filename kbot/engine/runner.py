@@ -163,6 +163,7 @@ class Engine:
             fv_change_20s=self.history.change_over(market.ticker, 20),
             fv_change_60s=self.history.change_over(market.ticker, 60),
             samples=self.history.samples(market.ticker),
+            book_age_s=book.age(),
             spot=self.spot.price(market.coin),
             spot_change_pct=self.spot.change_pct(market.coin),
             title=market.title,

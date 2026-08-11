@@ -90,6 +90,19 @@ def test_stale_book_is_never_traded():
     assert DriftStrategy().evaluate(ctx(book=stale)) is None
 
 
+def test_an_old_book_is_never_traded():
+    # Age comes from the context, not the wall clock, so a replay of last
+    # week's data is not rejected while a genuinely lagging feed still is.
+    assert DriftStrategy().evaluate(ctx(book_age_s=30.0)) is None
+
+
+def test_historical_data_is_not_rejected_as_stale():
+    """Regression: replaying old recordings must still produce signals."""
+    old = book(200, 60)
+    old.updated_at = 1_000_000.0  # long ago in wall-clock terms
+    assert DriftStrategy().evaluate(ctx(book=old, book_age_s=0.0)) is not None
+
+
 def test_extreme_prices_are_skipped():
     # A YES ask of 90c is outside the entry band.
     assert (

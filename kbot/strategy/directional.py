@@ -44,7 +44,7 @@ class Filters:
         book = ctx.book
         if book.is_stale:
             return "no book yet"
-        if book.age() > self.max_book_age_s:
+        if ctx.book_age_s > self.max_book_age_s:
             return "stale book"
         if ctx.seconds_to_close < self.min_seconds_left:
             return "too close to expiry"

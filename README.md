@@ -173,6 +173,11 @@ kbot/
   payments/
     provider.py        provider protocol; NOWPayments + manual
     webhook.py         callback listener and /healthz
+  research/
+    store.py           gzipped JSON-lines recording format
+    recorder.py        live capture, including how each market settled
+    replay.py          the backtest simulator
+    report.py          statistics and the honesty caveats
 site/index.html        the landing page
 deploy/                systemd unit, Caddyfile, fly.toml
 ```
@@ -242,7 +247,7 @@ pip install pytest pytest-asyncio
 python -m pytest
 ```
 
-177 tests, no network required, covering:
+200 tests, no network required, covering:
 
 - price/unit conversion and the order-book maths
 - the fee model, pinned to fee figures read off real fills
@@ -255,8 +260,38 @@ python -m pytest
   no matter how many times the provider retries its callback
 - the full engine loop end to end against injected market state — entry, exit,
   settlement, risk blocks, access enforcement
+- record/replay round trips, and the replay arithmetic against hand-computed
+  answers
 
 ---
+
+## Measuring the strategies
+
+There is no point selling signals you have not measured. `kbot.research` records
+live order books and replays any strategy over them, scored net of fees:
+
+```bash
+python -m kbot.research record --interval 1        # capture (run for days)
+python -m kbot.research days                       # what you have
+python -m kbot.research replay --strategy drift --size 10
+python -m kbot.research sweep --strategy all --targets 5,8,12,20,30
+```
+
+The replay reports trades, win rate, gross, fees, net, average edge per trade
+and max drawdown — overall and per coin — plus a rough t-statistic so a
+promising-looking result over 20 trades is labelled as noise rather than a
+discovery.
+
+It records how each market settled, because a strategy that holds to expiry
+cannot be scored without that, and dropping those trades would bias every
+number toward whatever exits happened to fill early. Trades whose settlement
+was never captured are reported as unresolved rather than counted.
+
+What it does not model: market impact from your own order, and queue position
+on resting exits (an exit only fills when a bid actually reaches the target,
+which is the pessimistic assumption). Watch for the trap the harness makes
+obvious — a **high win rate with a negative net**, which is what a small profit
+target plus full-stake losses at expiry produces.
 
 ## Deploying
 
