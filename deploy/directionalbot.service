@@ -1,0 +1,52 @@
+# systemd unit — install to /etc/systemd/system/directionalbot.service
+#
+#   sudo cp deploy/directionalbot.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now directionalbot
+#   journalctl -u directionalbot -f
+#
+# Assumes the repo is at /opt/directionalbot with a venv at .venv and a
+# populated .env alongside it.
+
+[Unit]
+Description=DirectionalBot — Kalshi 15-minute crypto trading bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=directionalbot
+Group=directionalbot
+WorkingDirectory=/opt/directionalbot
+EnvironmentFile=/opt/directionalbot/.env
+ExecStart=/opt/directionalbot/.venv/bin/python -m kbot
+
+# The bot holds open positions; give it time to finish a shutdown cleanly
+# rather than killing it mid-order.
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# The database and access keys live here and must survive a restart.
+StateDirectory=directionalbot
+ReadWritePaths=/opt/directionalbot/data
+
+# Hardening: the bot needs outbound network and its own data directory,
+# nothing else.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=directionalbot
+
+[Install]
+WantedBy=multi-user.target

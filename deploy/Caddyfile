@@ -1,0 +1,26 @@
+# Caddy reverse proxy — terminates TLS and forwards payment callbacks.
+# Caddy provisions and renews the certificate automatically.
+#
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# Then set in .env:
+#   PAYMENT_CALLBACK_URL=https://yourdomain.com/webhook/payment
+
+yourdomain.com {
+    encode gzip
+
+    # The landing page.
+    root * /opt/directionalbot/site
+    file_server
+
+    # Payment callbacks and health, served by the bot itself.
+    @bot path /webhook/* /healthz
+    reverse_proxy @bot 127.0.0.1:8080
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+    }
+}

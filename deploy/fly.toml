@@ -1,0 +1,43 @@
+# fly.io deployment.
+#
+#   fly launch --no-deploy --copy-config
+#   fly volumes create kbot_data --size 1
+#   fly secrets set TELEGRAM_BOT_TOKEN=... MASTER_KEY=... ADMIN_IDS=...
+#   fly deploy
+#
+# Pick a region close to Kalshi's matching engine — `ord` is Chicago.
+
+app = "directionalbot"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DB_PATH = "/data/kbot.sqlite3"
+  WEBHOOK_HOST = "0.0.0.0"
+  WEBHOOK_PORT = "8080"
+
+[mounts]
+  source = "kbot_data"
+  destination = "/data"
+
+# Only needed if you take payment callbacks. The bot itself makes outbound
+# connections only, so without payments you can drop this section entirely.
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false   # a trading bot must not scale to zero
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    grace_period = "10s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

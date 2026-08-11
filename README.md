@@ -39,7 +39,9 @@ Kalshi trading carries real risk of loss. Nothing here is financial advice.
 | **Exits** | A sell order goes in the moment an entry fills — entry + N cents, or an absolute target. Unfilled positions settle with the window. |
 | **Risk caps** | Daily loss limit, max open exposure, balance floor, per-window and total position limits. |
 | **Paper mode** | The same code path with a simulated broker, filling against real live prices. Default for every new user. |
-| **Access keys** | Admin-minted keys in daily / weekly / monthly / lifetime tiers, redeemed in chat. |
+| **Access keys** | Daily / weekly / monthly / lifetime tiers, minted by an admin or bought with crypto in chat. |
+| **Payments** | `/buy` issues a crypto invoice and delivers the key automatically once payment confirms. Manual address + admin confirmation works with no third-party account. |
+| **Website** | `site/index.html` — a self-contained landing page whose pricing buttons deep-link into the bot on the right tier. |
 
 Your funds stay in your own Kalshi account. The bot places orders through your
 API key; it never holds, moves, or withdraws money.
@@ -47,6 +49,9 @@ API key; it never holds, moves, or withdraws money.
 ---
 
 ## Setup
+
+**[SETUP.md](SETUP.md) is the full walkthrough** — BotFather to first paper
+trade, deployment, and payments. The short version:
 
 ```bash
 git clone <this repo> && cd claude-tgb
@@ -79,17 +84,17 @@ docker compose up -d
 
 ### Verify Kalshi series tickers
 
-Kalshi renames and adds series over time. Check what the bot can actually see:
+Kalshi renames and adds series over time, so the bot can re-derive the map from
+the live API rather than trusting a hard-coded list:
 
 ```bash
-python -m kbot.tools markets
+python -m kbot.tools series    # 15-min series that exist right now
+python -m kbot.tools markets   # the live window per coin
 ```
 
-If a coin is missing, override the mapping in `.env`:
-
-```
-KALSHI_SERIES={"BTC":"KXBTCD","ETH":"KXETHD","SOL":"KXSOLD"}
-```
+`series` prints a ready-to-paste `KALSHI_SERIES=` line. Note that the
+15-minute markets are the `KX<COIN>15M` series — the similarly-named
+`KX<COIN>D` series are the *hourly* directional markets.
 
 Set `KALSHI_DEMO=true` to point everything at Kalshi's demo environment while
 you're getting set up.
@@ -104,6 +109,8 @@ you're getting set up.
 /genkeys weekly 10     mint 10 weekly access keys
 /keystats              redemption counts per tier
 /grant <tg_id> monthly grant access directly, no key needed
+/sales                 revenue by tier
+/confirm [order-id]    settle a manual payment (no arg lists pending)
 ```
 
 Keys can also be minted without Telegram: `python -m kbot.tools mintkeys weekly 10`.
@@ -112,6 +119,7 @@ Keys can also be minted without Telegram: `python -m kbot.tools mintkeys weekly 
 
 ```
 /start                 open the dashboard
+/buy                   buy access with crypto
 /redeem YOUR-KEY       activate access
 /connect               add your Kalshi API key (guided, key deleted from chat)
 /positions             open positions and recent trades
@@ -159,9 +167,14 @@ kbot/
     api.py             minimal Bot API client (long polling)
     ui.py              dashboard text and inline keyboards
     bot.py             commands, callbacks, guided credential entry
+  payments/
+    provider.py        provider protocol; NOWPayments + manual
+    webhook.py         callback listener and /healthz
+site/index.html        the landing page
+deploy/                systemd unit, Caddyfile, fly.toml
 ```
 
-Three design decisions worth knowing:
+Four design decisions worth knowing:
 
 - **Strategies are pure.** A strategy sees a `MarketContext` and returns a
   `Signal` or `None`. It cannot place orders, read the database, or know which
@@ -178,6 +191,12 @@ Three design decisions worth knowing:
 - **Risk caps are enforced against the ledger, not memory.** Daily loss limits
   and exposure caps are recomputed from stored trades on every check, so
   restarting the bot cannot reset a user's limits.
+
+- **Prices are integer deci-cents everywhere internally.** Kalshi's 15-minute
+  markets tick in *tenths of a cent* below $0.10 and above $0.90, so whole
+  cents cannot represent a real quote (a live DOGE market at 95.1c/97.9c is an
+  ordinary sight). Conversion to and from the API's fixed-point dollar strings
+  happens only in `kalshi/prices.py`; user-facing settings stay in cents.
 
 ### Adding your own strategy
 
@@ -208,13 +227,29 @@ pip install pytest pytest-asyncio
 python -m pytest
 ```
 
-94 tests covering the order-book maths, both strategies and their filters,
-storage and access keys, the risk gate, the paper broker, market discovery, the
-dashboard's settings logic, and the full engine loop end to end against injected
-market state — entry, exit, settlement, risk blocks, and access enforcement. No
-network required.
+145 tests, no network required, covering:
+
+- price/unit conversion and the order-book maths
+- both strategies and every filter
+- the V2 order translation — where a sign error would silently invert every
+  DOWN trade
+- storage, access keys, the risk gate, the paper broker, market discovery
+- the dashboard's settings logic
+- payments: signature verification, and that one payment issues exactly one key
+  no matter how many times the provider retries its callback
+- the full engine loop end to end against injected market state — entry, exit,
+  settlement, risk blocks, access enforcement
 
 ---
+
+## Deploying
+
+`deploy/` has a hardened systemd unit, a Caddyfile that terminates TLS and
+serves the landing page alongside the payment webhook, and a `fly.toml` pinned
+to Chicago (`ord`) with scale-to-zero disabled. `docker compose up -d` works too.
+
+The bot exposes `/healthz` on port 8080 for health checks. It only needs an
+inbound port at all if you take payment callbacks.
 
 ## Operational notes
 
@@ -225,6 +260,8 @@ network required.
   than left running unwatched.
 - If a user's stored key stops authenticating, trading stops for that user and
   they are told why.
+- The landing page's ticker numbers are illustrative placeholders, marked as
+  such in the source. Wire them to a real feed or remove them.
 
 ## Disclaimer
 

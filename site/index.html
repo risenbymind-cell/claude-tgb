@@ -1,0 +1,528 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DirectionalBot — Automated signals for Kalshi's 15-minute crypto markets</title>
+<meta name="description" content="DirectionalBot reads Kalshi's live order book on the 15-minute Bitcoin, Ethereum and altcoin markets and executes on your account — or sends you the signal to trade yourself.">
+<meta property="og:title" content="DirectionalBot">
+<meta property="og:description" content="Automated directional signals for Kalshi's 15-minute crypto markets. Your account, your rules.">
+<meta property="og:type" content="website">
+<style>
+/* ---------------------------------------------------------------
+   Set your bot's @username in ONE place: the BOT const in the
+   script at the bottom of this file. Every button below picks it up.
+   --------------------------------------------------------------- */
+:root{
+  --bg:#07090d;
+  --bg-soft:#0d1117;
+  --panel:#11161f;
+  --panel-2:#151b26;
+  --line:#1e2634;
+  --line-soft:#161d28;
+  --ink:#e8edf5;
+  --ink-dim:#95a1b4;
+  --ink-faint:#5d6b80;
+  --up:#22c98a;
+  --down:#f2555a;
+  --accent:#4d8dff;
+  --accent-soft:rgba(77,141,255,.12);
+  --radius:14px;
+  --maxw:1120px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font-family:var(--sans);line-height:1.6;
+  -webkit-font-smoothing:antialiased;overflow-x:hidden;
+}
+a{color:inherit}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px}
+.eyebrow{
+  font:600 11px/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;
+  color:var(--accent);margin:0 0 18px;
+}
+h1,h2,h3{letter-spacing:-.02em;margin:0}
+h1{font-size:clamp(34px,6vw,60px);line-height:1.05;font-weight:700}
+h2{font-size:clamp(26px,3.6vw,38px);line-height:1.15;font-weight:650;margin-bottom:14px}
+h3{font-size:17px;font-weight:600}
+p{margin:0 0 16px}
+.lede{font-size:clamp(16px,1.9vw,19px);color:var(--ink-dim);max-width:60ch}
+section{padding:88px 0;border-top:1px solid var(--line-soft)}
+
+/* ---------- nav ---------- */
+header{
+  position:sticky;top:0;z-index:50;background:rgba(7,9,13,.82);
+  backdrop-filter:blur(12px);border-bottom:1px solid var(--line-soft);
+}
+.nav{display:flex;align-items:center;justify-content:space-between;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-weight:650;letter-spacing:-.01em}
+.brand .dot{width:9px;height:9px;border-radius:50%;background:var(--up);box-shadow:0 0 12px var(--up)}
+.nav-links{display:flex;gap:28px;font-size:14px;color:var(--ink-dim)}
+.nav-links a{text-decoration:none}
+.nav-links a:hover{color:var(--ink)}
+@media(max-width:860px){.nav-links{display:none}}
+
+/* ---------- buttons ---------- */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  padding:13px 24px;border-radius:10px;font-weight:600;font-size:15px;
+  text-decoration:none;border:1px solid transparent;cursor:pointer;
+  transition:transform .12s ease,background .15s ease,border-color .15s ease;
+}
+.btn:hover{transform:translateY(-1px)}
+.btn-primary{background:var(--accent);color:#fff}
+.btn-primary:hover{background:#3d7cf0}
+.btn-ghost{border-color:var(--line);color:var(--ink);background:transparent}
+.btn-ghost:hover{border-color:#2c3849;background:var(--panel)}
+.btn-sm{padding:9px 16px;font-size:14px}
+.btn-block{width:100%}
+
+/* ---------- hero ---------- */
+.hero{padding:96px 0 72px;border-top:0}
+.hero h1{max-width:16ch}
+.hero .lede{margin:22px 0 32px;font-size:clamp(16px,2vw,20px)}
+.cta-row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.trust{
+  margin-top:26px;font-size:13.5px;color:var(--ink-faint);
+  display:flex;gap:8px;flex-wrap:wrap;align-items:center;
+}
+.trust span:not(.sep){white-space:nowrap}
+.sep{color:#2a3444}
+
+/* ---------- ticker ---------- */
+.ticker{
+  border-top:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft);
+  background:var(--bg-soft);overflow:hidden;padding:14px 0;
+  -webkit-mask-image:linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent);
+          mask-image:linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent);
+}
+.ticker-track{display:flex;gap:40px;width:max-content;animation:slide 42s linear infinite}
+@keyframes slide{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@media(prefers-reduced-motion:reduce){.ticker-track{animation:none}}
+.tick{display:flex;align-items:baseline;gap:9px;font-family:var(--mono);font-size:13px;white-space:nowrap}
+.tick .sym{font-weight:650;letter-spacing:.02em}
+.tick .tf{color:var(--ink-faint);font-size:11.5px}
+.tick .mv{font-weight:600}
+.up{color:var(--up)}
+.down{color:var(--down)}
+
+/* ---------- grids & cards ---------- */
+.grid{display:grid;gap:18px}
+.g3{grid-template-columns:repeat(3,1fr)}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g4{grid-template-columns:repeat(4,1fr)}
+@media(max-width:920px){.g3,.g4{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:620px){.g2,.g3,.g4{grid-template-columns:1fr}}
+.card{
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:26px;transition:border-color .15s ease,transform .15s ease;
+}
+.card:hover{border-color:#293449;transform:translateY(-2px)}
+.card .ico{font-size:22px;display:block;margin-bottom:14px;line-height:1}
+.card p{color:var(--ink-dim);font-size:14.5px;margin:8px 0 0}
+.step-n{
+  font:600 11px/1 var(--mono);letter-spacing:.14em;color:var(--accent);
+  display:block;margin-bottom:12px;
+}
+
+/* ---------- pricing ---------- */
+.tiers{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:36px}
+@media(max-width:980px){.tiers{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:560px){.tiers{grid-template-columns:1fr}}
+.tier{
+  background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+  padding:26px 22px;display:flex;flex-direction:column;position:relative;
+}
+.tier.featured{border-color:var(--accent);background:linear-gradient(180deg,var(--accent-soft),var(--panel) 60%)}
+.tier-tag{
+  position:absolute;top:-9px;left:22px;background:var(--accent);color:#fff;
+  font:600 10px/1 var(--mono);letter-spacing:.12em;padding:5px 9px;border-radius:5px;
+}
+.tier .name{font:600 11px/1 var(--mono);letter-spacing:.16em;color:var(--ink-faint);margin-bottom:14px}
+.tier .price{font-size:36px;font-weight:700;letter-spacing:-.03em;line-height:1}
+.tier .per{color:var(--ink-faint);font-size:13px;margin:6px 0 16px}
+.tier .desc{color:var(--ink-dim);font-size:14px;flex:1;margin-bottom:20px}
+.pay-note{
+  margin-top:26px;text-align:center;color:var(--ink-faint);font-size:13.5px;
+  display:flex;gap:10px;justify-content:center;flex-wrap:wrap;align-items:center;
+}
+
+/* ---------- proof ---------- */
+.proof-link{color:var(--accent);text-decoration:none;font-weight:600;font-size:14.5px}
+.proof-link:hover{text-decoration:underline}
+
+/* ---------- faq ---------- */
+details{border-bottom:1px solid var(--line-soft);padding:4px 0}
+summary{
+  cursor:pointer;padding:18px 0;font-weight:550;font-size:16px;
+  display:flex;justify-content:space-between;align-items:center;gap:20px;list-style:none;
+}
+summary::-webkit-details-marker{display:none}
+summary::after{content:"+";color:var(--ink-faint);font-size:20px;font-weight:400;flex-shrink:0}
+details[open] summary::after{content:"−"}
+details p{color:var(--ink-dim);font-size:15px;padding:0 0 18px;margin:0;max-width:74ch}
+
+/* ---------- disclaimer / footer ---------- */
+.disclaimer{background:var(--bg-soft);border-top:1px solid var(--line-soft)}
+.disclaimer .wrap{padding-top:52px;padding-bottom:52px}
+.disclaimer p{color:var(--ink-faint);font-size:13.5px;max-width:88ch}
+.disclaimer .eyebrow{color:var(--ink-faint)}
+footer{border-top:1px solid var(--line-soft);padding:34px 0;color:var(--ink-faint);font-size:13.5px}
+.foot{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:center}
+.note{
+  background:var(--panel-2);border:1px solid var(--line);border-left:3px solid var(--ink-faint);
+  border-radius:8px;padding:14px 18px;color:var(--ink-dim);font-size:14px;margin-top:24px;
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap nav">
+    <div class="brand"><span class="dot"></span> DirectionalBot</div>
+    <nav class="nav-links">
+      <a href="#edge">The edge</a>
+      <a href="#features">What you get</a>
+      <a href="#proof">Proof</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <a class="btn btn-primary btn-sm" data-bot="start">Open in Telegram</a>
+  </div>
+</header>
+
+<!-- ================= HERO ================= -->
+<div class="wrap hero">
+  <h1>A tested edge on Kalshi's 15-minute crypto markets.</h1>
+  <p class="lede">
+    DirectionalBot reads the live order book in real time and executes on your
+    account — or just sends you the signal to trade yourself. You keep full
+    control of your size, your risk, and your money.
+  </p>
+  <div class="cta-row">
+    <a class="btn btn-primary" data-bot="start">Get started on Telegram →</a>
+    <a class="btn btn-ghost" href="#edge">See how it works</a>
+  </div>
+  <div class="trust">
+    <span>Runs on your own Kalshi account</span><span class="sep">·</span>
+    <span>Start in a no-risk paper simulation</span><span class="sep">·</span>
+    <span>Cancel anytime</span>
+  </div>
+</div>
+
+<!-- ================= TICKER ================= -->
+<div class="ticker"><div class="ticker-track" id="ticker"></div></div>
+
+<!-- ================= EDGE ================= -->
+<section id="edge">
+  <div class="wrap">
+    <p class="eyebrow">The edge</p>
+    <h2>Signals built on months of data — not gut feel.</h2>
+    <p class="lede" style="margin-bottom:40px">
+      Every signal comes from a strategy developed and stress-tested against
+      months of real Kalshi and crypto market data across thousands of
+      15-minute windows. The bot only acts when the setup matches a validated
+      pattern.
+    </p>
+    <div class="grid g3">
+      <div class="card">
+        <span class="step-n">01 · Read</span>
+        <h3>Live market, in real time</h3>
+        <p>It watches the live order book on Kalshi tick by tick — the same prices you'd trade at, no stale data.</p>
+      </div>
+      <div class="card">
+        <span class="step-n">02 · Fire</span>
+        <h3>Only on a real setup</h3>
+        <p>No trade on every wiggle. The bot waits for a signal that matches its tested edge, then acts on the direction — up or down.</p>
+      </div>
+      <div class="card">
+        <span class="step-n">03 · Manage</span>
+        <h3>Entry to exit, handled</h3>
+        <p>It sizes the position, places the order on your account, and manages the exit — cash out at a target price or a set profit above entry.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= HANDS-OFF ================= -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Hands-off</p>
+    <h2>We run it 24/7 — you don't lift a finger.</h2>
+    <p class="lede" style="margin-bottom:40px">
+      No software to install, no scripts, no leaving your computer on.
+      DirectionalBot lives on our servers and trades your account around the
+      clock. Set it up once from Telegram and walk away.
+    </p>
+    <div class="grid g3">
+      <div class="card">
+        <span class="ico">🖥️</span>
+        <h3>Nothing to install</h3>
+        <p>It's not an app you download or a script you babysit. Configure it in Telegram from your phone — that's the whole setup.</p>
+      </div>
+      <div class="card">
+        <span class="ico">📍</span>
+        <h3>Chicago-based servers</h3>
+        <p>Execution runs from Chicago — a core financial-trading hub — on low-latency infrastructure built for fast, consistent order placement.</p>
+      </div>
+      <div class="card">
+        <span class="ico">🌙</span>
+        <h3>Always on</h3>
+        <p>The bot watches the market and places trades around the clock — while your laptop's closed and while you sleep. We keep it running.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FEATURES ================= -->
+<section id="features">
+  <div class="wrap">
+    <p class="eyebrow">What you get</p>
+    <h2>A full trading desk in your pocket.</h2>
+    <p class="lede" style="margin-bottom:40px">
+      Everything runs from one Telegram bot with a clean dashboard. Your keys,
+      your account, your rules.
+    </p>
+    <div class="grid g3">
+      <div class="card"><span class="ico">⚡</span><h3>Auto-execute</h3>
+        <p>Let the bot place real orders on your own Kalshi account the instant a signal fires — hands-free.</p></div>
+      <div class="card"><span class="ico">📡</span><h3>Manual mode</h3>
+        <p>Prefer to pull the trigger yourself? Get every signal in real time with a confidence read and trade it your way.</p></div>
+      <div class="card"><span class="ico">◪</span><h3>Smart cash-out</h3>
+        <p>Auto-sell at a target price, or lock in a set number of cents above your entry every time. Your call.</p></div>
+      <div class="card"><span class="ico">🛡</span><h3>Built-in risk caps</h3>
+        <p>Daily loss limits, exposure caps, a balance floor and per-window trade limits keep the bot disciplined.</p></div>
+      <div class="card"><span class="ico">📝</span><h3>Paper mode</h3>
+        <p>Test everything in a live, no-money simulation at real prices until you're happy with your settings.</p></div>
+      <div class="card"><span class="ico">◆</span><h3>Multi-coin</h3>
+        <p>BTC, ETH, SOL, XRP, DOGE, BNB and more — pick your coins and strategies from simple presets.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= PROOF ================= -->
+<section id="proof">
+  <div class="wrap">
+    <p class="eyebrow">Proof</p>
+    <h2>Don't take our word for it.</h2>
+    <p class="lede" style="margin-bottom:40px">
+      Winning trades are posted to our results channel as they happen —
+      anonymized and in real time — and members share their own outcomes in
+      testimonials. Look before you commit a dollar.
+    </p>
+    <div class="grid g2">
+      <div class="card">
+        <span class="ico">🏆</span>
+        <h3>Live wins, as they happen</h3>
+        <p>Real cash-outs auto-posted to our results channel — time, coin, entry, exit and profit. No cherry-picking, no edited screenshots.</p>
+        <p style="margin-top:14px"><a class="proof-link" href="RESULTS_CHANNEL_URL">Open the results channel →</a></p>
+      </div>
+      <div class="card">
+        <span class="ico">💬</span>
+        <h3>What members say</h3>
+        <p>Screenshots of real trader vouches, straight from their DMs — collected in our testimonials channel.</p>
+        <p style="margin-top:14px"><a class="proof-link" href="TESTIMONIALS_CHANNEL_URL">See testimonials →</a></p>
+      </div>
+    </div>
+    <div class="note">
+      Results vary and losing windows happen — the bot doesn't win every trade.
+      What you see is real, not a promise of future performance.
+    </div>
+  </div>
+</section>
+
+<!-- ================= PRICING ================= -->
+<section id="pricing">
+  <div class="wrap">
+    <p class="eyebrow">Access</p>
+    <h2>Early pricing — pay in crypto, unlock instantly.</h2>
+    <p class="lede">
+      Buy a key, redeem it in the bot, and you're trading in minutes.
+      Introductory rates, subject to change.
+    </p>
+
+    <div class="tiers">
+      <div class="tier">
+        <div class="name">Daily</div>
+        <div class="price">$25</div>
+        <div class="per">/ 24 hours</div>
+        <div class="desc">Full access for a single session. The easiest way to try it.</div>
+        <a class="btn btn-ghost btn-block" data-bot="buy_daily">Get Daily</a>
+      </div>
+      <div class="tier">
+        <div class="name">Weekly</div>
+        <div class="price">$50</div>
+        <div class="per">/ 7 days</div>
+        <div class="desc">A full week of access to test the waters and find your settings.</div>
+        <a class="btn btn-ghost btn-block" data-bot="buy_weekly">Get Weekly</a>
+      </div>
+      <div class="tier featured">
+        <span class="tier-tag">Best value</span>
+        <div class="name">Monthly</div>
+        <div class="price">$100</div>
+        <div class="per">/ 30 days</div>
+        <div class="desc">A month of full access — the sweet spot for regular traders.</div>
+        <a class="btn btn-primary btn-block" data-bot="buy_monthly">Get Monthly</a>
+      </div>
+      <div class="tier">
+        <span class="tier-tag" style="background:#2c3849">Serious traders</span>
+        <div class="name">Lifetime</div>
+        <div class="price">$1,000</div>
+        <div class="per">/ one time</div>
+        <div class="desc">Permanent access and every future update. One payment, done.</div>
+        <a class="btn btn-ghost btn-block" data-bot="buy_lifetime">Get Lifetime</a>
+      </div>
+    </div>
+
+    <div class="pay-note">
+      <span>◈ Pay with BTC · ETH · USDT · USDC · SOL and more</span>
+      <span class="sep">·</span>
+      <span>Your key activates the moment payment confirms</span>
+    </div>
+  </div>
+</section>
+
+<!-- ================= FAQ ================= -->
+<section id="faq">
+  <div class="wrap">
+    <p class="eyebrow">Questions</p>
+    <h2>Good to know before you start.</h2>
+    <div style="margin-top:28px">
+      <details>
+        <summary>Whose account does it trade on?</summary>
+        <p>Your own. You create an API key in your Kalshi account and connect it
+        in the bot. Your funds never leave your account — the bot only places
+        orders through your key, and it can't withdraw or move money. Remove the
+        key any time with /disconnect.</p>
+      </details>
+      <details>
+        <summary>How much control do I have over how it trades?</summary>
+        <p>Full control. You choose the coins, the strategy preset, how many
+        contracts per signal, the price band you're willing to enter at, your
+        exit rule, and your risk caps — daily loss limit, maximum open exposure,
+        a balance floor it won't spend below, and how many trades it can take per
+        window. You can stop it at any moment.</p>
+      </details>
+      <details>
+        <summary>Do I need to keep my computer on?</summary>
+        <p>No. The bot runs on our servers around the clock. There's nothing to
+        install and nothing to babysit — you configure it once from Telegram on
+        your phone and it keeps working while you sleep.</p>
+      </details>
+      <details>
+        <summary>Do I need to trade real money?</summary>
+        <p>Not to start. Paper mode runs the exact same logic against real live
+        prices and simulates every fill, so you can watch it trade for as long as
+        you like before connecting a Kalshi key. New accounts start in paper mode
+        by default.</p>
+      </details>
+      <details>
+        <summary>Is this guaranteed to make money?</summary>
+        <p>No, and anyone who tells you otherwise is lying. Trading involves a
+        real risk of loss, losing windows happen, and past or backtested results
+        do not guarantee future results. The bot is a tool for executing a
+        strategy consistently — it is not a promise of profit. Only trade money
+        you can afford to lose.</p>
+      </details>
+      <details>
+        <summary>If your strategy works, why sell access instead of just trading it yourself?</summary>
+        <p>Both. Position size on 15-minute markets is capped by the liquidity in
+        each window — past a certain size you move the price against yourself and
+        the edge shrinks. Access fees are revenue that doesn't compete with our
+        own fills, and they fund the infrastructure and ongoing research.</p>
+      </details>
+      <details>
+        <summary>How do I pay and get access?</summary>
+        <p>Pick a plan above and it opens the bot on that tier. Pay in BTC, ETH,
+        USDT, USDC, SOL or another supported coin, and your key is issued
+        automatically the moment the payment confirms on-chain. Redeem it in the
+        bot with /redeem and you're trading.</p>
+      </details>
+      <details>
+        <summary>Which coins and markets?</summary>
+        <p>Kalshi's 15-minute crypto up/down markets: BTC, ETH, SOL, XRP, DOGE,
+        BNB, HYPE and more as Kalshi lists them. You pick which ones the bot
+        watches for you.</p>
+      </details>
+      <details>
+        <summary>Can I cancel or change plans?</summary>
+        <p>There's no subscription to cancel — you buy a key for a fixed period
+        and it simply expires. Buy another whenever you want, at any tier. Time
+        from a new key stacks on top of whatever you have left.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ================= DISCLAIMER ================= -->
+<div class="disclaimer">
+  <div class="wrap">
+    <p class="eyebrow">Risk disclaimer</p>
+    <p>
+      DirectionalBot is a trading-automation tool, not financial, investment, or
+      trading advice. Trading on Kalshi and in crypto markets involves
+      substantial risk of loss and is not suitable for everyone. Signals and
+      automation are provided on an "as-is" basis with no guarantee of profit or
+      performance.
+    </p>
+    <p>
+      Past performance and any backtested results do not guarantee future
+      results. You are solely responsible for your own trading decisions, your
+      account, and your funds. Only trade with money you can afford to lose.
+    </p>
+  </div>
+</div>
+
+<footer>
+  <div class="wrap foot">
+    <div>
+      <strong style="color:var(--ink)">DirectionalBot</strong> — Automated
+      directional signals for Kalshi's 15-minute crypto markets. Your account,
+      your rules.
+    </div>
+    <div><a data-bot="start" style="color:var(--accent);text-decoration:none">Open in Telegram →</a></div>
+  </div>
+</footer>
+
+<script>
+/* ------------------------------------------------------------------
+   1. Set your bot's @username here (no @). Every CTA and pricing
+      button below links straight into the bot on the right tier:
+        data-bot="start"       -> t.me/<BOT>
+        data-bot="buy_monthly" -> t.me/<BOT>?start=buy_monthly
+      The bot reads that payload and opens the buy flow on that tier.
+   2. Replace RESULTS_CHANNEL_URL and TESTIMONIALS_CHANNEL_URL in the
+      Proof section with your channel links.
+   ------------------------------------------------------------------ */
+const BOT = "YourBotUsername";
+
+for (const el of document.querySelectorAll("[data-bot]")) {
+  const payload = el.dataset.bot;
+  el.href = payload === "start"
+    ? `https://t.me/${BOT}`
+    : `https://t.me/${BOT}?start=${payload}`;
+}
+
+/* Ticker. These are illustrative placeholders for the marquee, not live
+   quotes — swap in a feed if you want real numbers, but don't present
+   invented ones as real. */
+const COINS = [
+  ["BTC", 0.14, 1], ["ETH", 0.09, -1], ["SOL", 0.31, 1], ["XRP", 0.07, 1],
+  ["DOGE", 0.22, -1], ["BNB", 0.05, 1], ["HYPE", 0.18, -1],
+];
+const cell = ([sym, pct, dir]) => `
+  <span class="tick">
+    <span class="sym">${sym}</span>
+    <span class="tf">15-min</span>
+    <span class="mv ${dir > 0 ? "up" : "down"}">${dir > 0 ? "▲ UP" : "▼ DOWN"} ${pct.toFixed(2)}%</span>
+  </span>`;
+/* Rendered twice so the -50% translate loops seamlessly. */
+document.getElementById("ticker").innerHTML =
+  COINS.map(cell).join("") + COINS.map(cell).join("");
+</script>
+</body>
+</html>
