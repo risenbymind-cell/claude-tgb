@@ -84,6 +84,14 @@ def _env_json(name: str, default: dict[str, str]) -> dict[str, str]:
     return {str(k).upper(): str(v) for k, v in parsed.items()}
 
 
+def _env_prices() -> dict[str, float]:
+    """Per-tier USD prices, overridable without touching code."""
+    raw = os.getenv("PRICES_USD")
+    if not raw:
+        return {}
+    return {str(k).lower(): float(v) for k, v in json.loads(raw).items()}
+
+
 @dataclass(frozen=True)
 class Settings:
     telegram_token: str
@@ -98,6 +106,18 @@ class Settings:
     # used to place an order — orders always go through the user's own key.
     md_key_id: str | None = None
     md_private_key: str | None = None
+
+    # Payments.
+    payment_provider: str = "manual"
+    nowpayments_api_key: str | None = None
+    nowpayments_ipn_secret: str | None = None
+    payment_callback_url: str | None = None
+    manual_addresses: dict[str, str] = field(default_factory=dict)
+    prices: dict[str, float] = field(default_factory=dict)
+    webhook_host: str = "0.0.0.0"
+    webhook_port: int = 8080
+    webhook_path: str = "/webhook/payment"
+    bot_username: str | None = None
 
     # Engine cadence.
     scan_interval_s: float = 1.0
@@ -163,6 +183,16 @@ def load_settings() -> Settings:
         demo=_env_bool("KALSHI_DEMO", False),
         series=_env_json("KALSHI_SERIES", DEFAULT_SERIES),
         spot_products=_env_json("SPOT_PRODUCTS", DEFAULT_SPOT_PRODUCTS),
+        payment_provider=os.getenv("PAYMENT_PROVIDER", "manual").strip().lower(),
+        nowpayments_api_key=os.getenv("NOWPAYMENTS_API_KEY") or None,
+        nowpayments_ipn_secret=os.getenv("NOWPAYMENTS_IPN_SECRET") or None,
+        payment_callback_url=os.getenv("PAYMENT_CALLBACK_URL") or None,
+        manual_addresses=_env_json("MANUAL_PAY_ADDRESSES", {}),
+        prices=_env_prices(),
+        webhook_host=os.getenv("WEBHOOK_HOST", "0.0.0.0"),
+        webhook_port=_env_int("WEBHOOK_PORT", 8080),
+        webhook_path=os.getenv("WEBHOOK_PATH", "/webhook/payment"),
+        bot_username=(os.getenv("BOT_USERNAME") or "").lstrip("@") or None,
         md_key_id=os.getenv("KALSHI_API_KEY_ID") or None,
         md_private_key=_read_private_key(),
         scan_interval_s=float(os.getenv("SCAN_INTERVAL_S", "1.0")),

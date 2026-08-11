@@ -65,6 +65,25 @@ CREATE TABLE IF NOT EXISTS trades (
 CREATE INDEX IF NOT EXISTS idx_trades_user_time ON trades(tg_id, opened_at);
 CREATE INDEX IF NOT EXISTS idx_trades_open ON trades(tg_id, status);
 
+CREATE TABLE IF NOT EXISTS invoices (
+    order_id     TEXT PRIMARY KEY,
+    tg_id        INTEGER NOT NULL,
+    tier         TEXT NOT NULL,
+    amount_usd   REAL NOT NULL,
+    provider     TEXT NOT NULL,
+    provider_id  TEXT,
+    currency     TEXT,
+    pay_address  TEXT,
+    pay_amount   TEXT,
+    checkout_url TEXT,
+    status       TEXT NOT NULL DEFAULT 'pending',
+    key_issued   TEXT,
+    created_at   REAL NOT NULL,
+    settled_at   REAL
+);
+
+CREATE INDEX IF NOT EXISTS idx_invoices_user ON invoices(tg_id, created_at);
+
 CREATE TABLE IF NOT EXISTS signals (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker      TEXT NOT NULL,
@@ -121,6 +140,24 @@ class User:
 
     def get(self, name: str) -> Any:
         return self.settings.get(name, DEFAULT_SETTINGS.get(name))
+
+
+@dataclass
+class Invoice:
+    order_id: str
+    tg_id: int
+    tier: str
+    amount_usd: float
+    provider: str
+    provider_id: str | None
+    currency: str | None
+    pay_address: str | None
+    pay_amount: str | None
+    checkout_url: str | None
+    status: str  # "pending" | "paid" | "failed"
+    key_issued: str | None
+    created_at: float
+    settled_at: float | None
 
 
 @dataclass
@@ -497,6 +534,150 @@ class Storage:
 
         return await self._run(work)
 
+    # ---------------- invoices ----------------
+
+    async def create_invoice(
+        self,
+        *,
+        order_id: str,
+        tg_id: int,
+        tier: str,
+        amount_usd: float,
+        provider: str,
+        provider_id: str | None,
+        currency: str | None,
+        pay_address: str | None,
+        pay_amount: str | None,
+        checkout_url: str | None,
+    ) -> Invoice:
+        def work() -> Invoice:
+            self._conn.execute(
+                "INSERT INTO invoices (order_id, tg_id, tier, amount_usd, provider,"
+                " provider_id, currency, pay_address, pay_amount, checkout_url,"
+                " created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    order_id,
+                    tg_id,
+                    tier,
+                    amount_usd,
+                    provider,
+                    provider_id,
+                    currency,
+                    pay_address,
+                    pay_amount,
+                    checkout_url,
+                    time.time(),
+                ),
+            )
+            self._conn.commit()
+            return _row_to_invoice(
+                self._conn.execute(
+                    "SELECT * FROM invoices WHERE order_id = ?", (order_id,)
+                ).fetchone()
+            )
+
+        return await self._run(work)
+
+    async def get_invoice(self, order_id: str) -> Invoice | None:
+        def work() -> Invoice | None:
+            row = self._conn.execute(
+                "SELECT * FROM invoices WHERE order_id = ?", (order_id,)
+            ).fetchone()
+            return _row_to_invoice(row) if row else None
+
+        return await self._run(work)
+
+    async def user_invoices(self, tg_id: int, limit: int = 10) -> list[Invoice]:
+        def work() -> list[Invoice]:
+            rows = self._conn.execute(
+                "SELECT * FROM invoices WHERE tg_id = ? ORDER BY created_at DESC"
+                " LIMIT ?",
+                (tg_id, limit),
+            ).fetchall()
+            return [_row_to_invoice(r) for r in rows]
+
+        return await self._run(work)
+
+    async def pending_invoices(self, older_than: float = 0.0) -> list[Invoice]:
+        def work() -> list[Invoice]:
+            rows = self._conn.execute(
+                "SELECT * FROM invoices WHERE status = 'pending' AND created_at <= ?"
+                " ORDER BY created_at",
+                (time.time() - older_than,),
+            ).fetchall()
+            return [_row_to_invoice(r) for r in rows]
+
+        return await self._run(work)
+
+    async def settle_invoice(self, order_id: str) -> tuple[Invoice | None, str | None]:
+        """Mark an invoice paid and mint its key, exactly once.
+
+        Providers retry webhooks, so this is the single place that guards
+        against issuing two keys for one payment: the status check and the key
+        write happen in the same transaction.
+        """
+
+        def work() -> tuple[Invoice | None, str | None]:
+            row = self._conn.execute(
+                "SELECT * FROM invoices WHERE order_id = ?", (order_id,)
+            ).fetchone()
+            if row is None:
+                return None, None
+            if row["status"] == "paid":
+                # Already settled — hand back the key we issued the first time.
+                return _row_to_invoice(row), row["key_issued"]
+
+            tier = row["tier"]
+            duration = TIERS.get(tier)
+            if duration is None:
+                return _row_to_invoice(row), None
+
+            key = f"{tier[:1].upper()}-{secrets.token_hex(8).upper()}"
+            now = time.time()
+            self._conn.execute(
+                "INSERT INTO access_keys (key, tier, duration_s, created_at)"
+                " VALUES (?, ?, ?, ?)",
+                (key, tier, duration, now),
+            )
+            self._conn.execute(
+                "UPDATE invoices SET status = 'paid', key_issued = ?, settled_at = ?"
+                " WHERE order_id = ?",
+                (key, now, order_id),
+            )
+            self._conn.commit()
+            return (
+                _row_to_invoice(
+                    self._conn.execute(
+                        "SELECT * FROM invoices WHERE order_id = ?", (order_id,)
+                    ).fetchone()
+                ),
+                key,
+            )
+
+        return await self._run(work)
+
+    async def fail_invoice(self, order_id: str) -> None:
+        await self._run(
+            lambda: (
+                self._conn.execute(
+                    "UPDATE invoices SET status = 'failed' WHERE order_id = ?"
+                    " AND status = 'pending'",
+                    (order_id,),
+                ),
+                self._conn.commit(),
+            )
+        )
+
+    async def revenue(self) -> dict[str, tuple[int, float]]:
+        def work() -> dict[str, tuple[int, float]]:
+            rows = self._conn.execute(
+                "SELECT tier, COUNT(*) AS n, SUM(amount_usd) AS total FROM invoices"
+                " WHERE status = 'paid' GROUP BY tier"
+            ).fetchall()
+            return {r["tier"]: (r["n"], r["total"] or 0.0) for r in rows}
+
+        return await self._run(work)
+
     async def record_signal(
         self,
         ticker: str,
@@ -516,6 +697,33 @@ class Storage:
                 self._conn.commit(),
             )
         )
+
+
+PRICES_USD: dict[str, float] = {
+    "daily": 25.0,
+    "weekly": 50.0,
+    "monthly": 100.0,
+    "lifetime": 1000.0,
+}
+
+
+def _row_to_invoice(row: sqlite3.Row) -> Invoice:
+    return Invoice(
+        order_id=row["order_id"],
+        tg_id=row["tg_id"],
+        tier=row["tier"],
+        amount_usd=row["amount_usd"],
+        provider=row["provider"],
+        provider_id=row["provider_id"],
+        currency=row["currency"],
+        pay_address=row["pay_address"],
+        pay_amount=row["pay_amount"],
+        checkout_url=row["checkout_url"],
+        status=row["status"],
+        key_issued=row["key_issued"],
+        created_at=row["created_at"],
+        settled_at=row["settled_at"],
+    )
 
 
 def _row_to_trade(row: sqlite3.Row) -> Trade:

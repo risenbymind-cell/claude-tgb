@@ -15,7 +15,8 @@ from ..engine.runner import Engine
 from ..kalshi.auth import InvalidPrivateKey, Signer
 from ..kalshi.prices import format_cents, format_dollars
 from ..kalshi.rest import KalshiClient, KalshiError
-from ..storage import DEFAULT_SETTINGS, TIERS, Storage, User
+from ..payments import PaymentService
+from ..storage import DEFAULT_SETTINGS, PRICES_USD, TIERS, Storage, User
 from ..strategy import REGISTRY
 from . import ui
 from .api import TelegramClient, TelegramError
@@ -25,6 +26,7 @@ log = logging.getLogger(__name__)
 COMMANDS = [
     ("start", "Open the dashboard"),
     ("dashboard", "Open the dashboard"),
+    ("buy", "Buy access with crypto"),
     ("redeem", "Redeem an access key"),
     ("connect", "Connect your Kalshi API key"),
     ("disconnect", "Remove your Kalshi API key"),
@@ -102,6 +104,7 @@ class Bot:
         self.storage = storage
         self.tg = TelegramClient(settings.telegram_token)
         self.engine = Engine(settings, storage, self.notify)
+        self.payments = PaymentService(settings, storage, self.notify)
         self.risk = RiskManager(storage)
         self._pending: dict[int, PendingInput] = {}
 
@@ -112,11 +115,13 @@ class Bot:
         log.info("Connected to Telegram as @%s", me.get("username"))
         await self.tg.set_my_commands(COMMANDS)
         await self.engine.start()
+        await self.payments.start()
         try:
             async for update in self.tg.poll():
                 # One slow handler must not stall the update stream.
                 asyncio.create_task(self._safe_handle(update))
         finally:
+            await self.payments.stop()
             await self.engine.stop()
             await self.tg.aclose()
 
@@ -181,6 +186,7 @@ class Bot:
             "dashboard": self._cmd_dashboard,
             "settings": self._cmd_dashboard,
             "help": self._cmd_help,
+            "buy": self._cmd_buy,
             "redeem": self._cmd_redeem,
             "connect": self._cmd_connect,
             "disconnect": self._cmd_disconnect,
@@ -191,6 +197,8 @@ class Bot:
             "genkeys": self._cmd_genkeys,
             "keystats": self._cmd_keystats,
             "grant": self._cmd_grant,
+            "sales": self._cmd_sales,
+            "confirm": self._cmd_confirm,
         }
         handler = handlers.get(command)
         if handler is None:
@@ -204,8 +212,13 @@ class Bot:
 
     async def _cmd_start(self, user: User, args: list[str], message: dict) -> None:
         await self.tg.send_message(user.tg_id, WELCOME)
-        # A key can be passed as a deep link payload: /start KEY
+        # Deep-link payloads: `/start buy_monthly` from the website's pricing
+        # buttons, or `/start SOME-KEY` to redeem directly.
         if args:
+            payload = args[0]
+            if payload.lower().startswith("buy_"):
+                await self._cmd_buy(user, [payload[4:]], message)
+                return
             await self._cmd_redeem(user, args, message)
             return
         await self._send_dashboard(await self._reload(user))
@@ -215,6 +228,90 @@ class Bot:
 
     async def _cmd_dashboard(self, user: User, args: list[str], message: dict) -> None:
         await self._send_dashboard(user)
+
+    async def _cmd_buy(self, user: User, args: list[str], message: dict) -> None:
+        if not self.payments.enabled:
+            await self.tg.send_message(
+                user.tg_id,
+                "Payments aren't set up on this bot. Ask an admin for a key, "
+                "then redeem it with <code>/redeem YOUR-KEY</code>.",
+            )
+            return
+
+        tier = args[0].lower() if args else ""
+        if tier not in TIERS:
+            await self.tg.send_message(
+                user.tg_id, ui.buy_text(self.settings), reply_markup=ui.buy_keyboard(self.settings)
+            )
+            return
+        currency = args[1].upper() if len(args) > 1 else None
+        await self._start_purchase(user, tier, currency)
+
+    async def _start_purchase(
+        self, user: User, tier: str, currency: str | None = None
+    ) -> None:
+        try:
+            invoice = await self.payments.create_invoice(user.tg_id, tier, currency)
+        except Exception:  # noqa: BLE001 - provider outage must not look like a bug
+            log.exception("Invoice creation failed for %s", user.tg_id)
+            await self.tg.send_message(
+                user.tg_id,
+                "⚠️ Couldn't reach the payment provider. Try again in a minute.",
+            )
+            return
+
+        await self.tg.send_message(
+            user.tg_id,
+            ui.invoice_text(
+                tier,
+                self.settings.prices.get(tier, PRICES_USD[tier]),
+                invoice,
+                automatic=self.payments.automatic,
+            ),
+            reply_markup=ui.invoice_keyboard(invoice),
+        )
+
+    async def _cmd_sales(self, user: User, args: list[str], message: dict) -> None:
+        if not self._is_admin(user):
+            return
+        revenue = await self.storage.revenue()
+        if not revenue:
+            await self.tg.send_message(user.tg_id, "No sales yet.")
+            return
+        lines = ["<b>Sales</b>", ""]
+        total = 0.0
+        for tier, (count, amount) in sorted(revenue.items()):
+            total += amount
+            lines.append(f"{tier}: {count} × = ${amount:,.2f}")
+        lines += ["", f"<b>Total: ${total:,.2f}</b>"]
+        await self.tg.send_message(user.tg_id, "\n".join(lines))
+
+    async def _cmd_confirm(self, user: User, args: list[str], message: dict) -> None:
+        """Manually settle an invoice — the admin side of manual payments."""
+        if not self._is_admin(user):
+            return
+        if not args:
+            pending = await self.storage.pending_invoices()
+            if not pending:
+                await self.tg.send_message(user.tg_id, "No pending invoices.")
+                return
+            lines = ["<b>Pending invoices</b>", ""]
+            for inv in pending[:20]:
+                lines.append(
+                    f"<code>{inv.order_id}</code>\n"
+                    f"  {inv.tier} ${inv.amount_usd:.2f} · user {inv.tg_id}"
+                )
+            lines += ["", "Confirm with <code>/confirm ORDER_ID</code>"]
+            await self.tg.send_message(user.tg_id, "\n".join(lines))
+            return
+
+        key = await self.payments.settle(args[0])
+        if key is None:
+            await self.tg.send_message(user.tg_id, "❌ No such pending order.")
+        else:
+            await self.tg.send_message(
+                user.tg_id, f"✅ Settled. Key <code>{key}</code> delivered."
+            )
 
     async def _cmd_redeem(self, user: User, args: list[str], message: dict) -> None:
         if not args:
@@ -450,6 +547,10 @@ class Bot:
         elif namespace == "run":
             toast = await self._toggle_running(user, rest == "start")
             user = await self._reload(user)
+        elif namespace == "buy":
+            await self.tg.answer_callback_query(callback_id)
+            await self._start_purchase(user, rest)
+            return
 
         view = "main"
         if namespace == "nav":
@@ -525,7 +626,7 @@ class Bot:
             await self.storage.set_enabled(user.tg_id, False)
             return "Stopped"
         if not self._has_access(user):
-            return "No active access — redeem a key with /redeem"
+            return "No active access — use /buy or /redeem"
         if not (user.get("coins") or []):
             return "Pick at least one coin first"
         if not user.get("paper") and not user.has_credentials:
@@ -580,7 +681,12 @@ class Bot:
 
         note = ""
         if not self._has_access(user):
-            note = "⚠️ No active access. Redeem a key with <code>/redeem KEY</code>."
+            note = "⚠️ No active access. "
+            note += (
+                "Buy with /buy, or redeem a key with <code>/redeem KEY</code>."
+                if self.payments.enabled
+                else "Redeem a key with <code>/redeem KEY</code>."
+            )
         return (
             ui.dashboard_text(user, self.settings, note),
             ui.dashboard_keyboard(user),
@@ -599,6 +705,10 @@ class Bot:
     async def _deny(self, user: User) -> None:
         await self.tg.send_message(
             user.tg_id,
-            "🔒 You need an active access key. Redeem one with "
-            "<code>/redeem YOUR-KEY</code>.",
+            "🔒 You need active access. "
+            + (
+                "Buy one with /buy, or redeem a key with <code>/redeem YOUR-KEY</code>."
+                if self.payments.enabled
+                else "Redeem a key with <code>/redeem YOUR-KEY</code>."
+            ),
         )

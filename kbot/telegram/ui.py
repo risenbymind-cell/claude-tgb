@@ -350,3 +350,93 @@ def pnl_text(trades: list[Trade], label: str) -> str:
     lines += block("Live", live)
     lines += block("Paper", paper)
     return "\n".join(lines).strip()
+
+
+# ---------------- buying access ----------------
+
+TIER_BLURB = {
+    "daily": "Full access for a single session.",
+    "weekly": "A week to test the waters and find your settings.",
+    "monthly": "The sweet spot for regular traders.",
+    "lifetime": "Permanent access and every future update.",
+}
+TIER_DURATION = {
+    "daily": "24 hours",
+    "weekly": "7 days",
+    "monthly": "30 days",
+    "lifetime": "one time",
+}
+TIER_ORDER = ["daily", "weekly", "monthly", "lifetime"]
+
+
+def _price(settings: Settings, tier: str) -> float:
+    from ..storage import PRICES_USD
+
+    return settings.prices.get(tier, PRICES_USD[tier])
+
+
+def buy_text(settings: Settings) -> str:
+    lines = ["<b>Get access</b>", ""]
+    for tier in TIER_ORDER:
+        price = _price(settings, tier)
+        lines.append(
+            f"<b>{tier.title()}</b> — ${price:,.0f} / {TIER_DURATION[tier]}\n"
+            f"<i>{TIER_BLURB[tier]}</i>"
+        )
+    lines += [
+        "",
+        "Pay in BTC, ETH, USDT, USDC, SOL and more.",
+        "Your key is issued as soon as the payment confirms.",
+    ]
+    return "\n".join(lines)
+
+
+def buy_keyboard(settings: Settings) -> dict:
+    rows = [
+        [button(f"{tier.title()} · ${_price(settings, tier):,.0f}", f"buy:{tier}")]
+        for tier in TIER_ORDER
+    ]
+    return keyboard(*rows)
+
+
+def invoice_text(tier: str, amount_usd: float, invoice, automatic: bool) -> str:
+    lines = [
+        f"<b>{tier.title()} access</b> — ${amount_usd:,.2f}",
+        "",
+    ]
+    if invoice.checkout_url:
+        lines.append("Tap below to pay — pick any supported coin at checkout.")
+    elif invoice.pay_address:
+        currency = invoice.pay_currency or "crypto"
+        if invoice.pay_amount:
+            # The provider quoted a rate, so the buyer sends an exact amount.
+            lines.append(f"Send exactly <b>{invoice.pay_amount} {currency}</b> to:")
+        else:
+            # No rate available: quote in USD and let them convert.
+            lines.append(
+                f"Send <b>${amount_usd:,.2f}</b> worth of <b>{currency}</b> to:"
+            )
+        lines.append(f"<code>{html.escape(invoice.pay_address)}</code>")
+    else:
+        lines.append("No payment address is configured — contact an admin.")
+
+    lines += ["", f"Order: <code>{html.escape(invoice.provider_id)}</code>"]
+    if automatic:
+        lines.append(
+            "<i>Your key arrives here automatically once the payment confirms "
+            "on-chain.</i>"
+        )
+    else:
+        lines.append(
+            "<i>Send the order ID to an admin after paying and your key will be "
+            "issued.</i>"
+        )
+    return "\n".join(lines)
+
+
+def invoice_keyboard(invoice) -> dict:
+    rows = []
+    if invoice.checkout_url:
+        rows.append([url_button("💳 Pay now", invoice.checkout_url)])
+    rows.append([button("‹ Back to dashboard", "nav:main")])
+    return keyboard(*rows)
