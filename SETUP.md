@@ -61,7 +61,44 @@ If `markets` lists tickers and countdowns, the data path works.
 
 ---
 
-## 4. Run it
+## 4. Preflight
+
+One command checks everything a deploy needs and exits non-zero if anything is
+actually broken, so it can gate a release:
+
+```bash
+.venv/bin/python -m kbot.tools doctor
+```
+
+```
+Configuration
+  ✓ config valid · PRODUCTION environment
+  ✓ 12 coin(s) configured
+  ✓ 1 admin(s)
+Storage
+  ✓ /opt/directionalbot/data is writable
+  ✓ existing database opens with this MASTER_KEY
+Network
+  ✓ webhook port 8080 is free
+  ✓ Kalshi reachable · 9 live 15-minute market(s)
+  ✓ Telegram token valid · @yourbot
+Payments & results
+  ! no payment addresses set — /buy is disabled, use /genkeys
+
+Ready to deploy, with 1 warning(s).
+```
+
+Exit codes: `0` ready, `1` something is broken, `2` the configuration itself is
+invalid.
+
+A bad value never produces a stack trace — it produces one line naming the
+variable and what was expected, and the service units carry
+`RestartPreventExitStatus=2` so a typo in `.env` stops the service instead of
+crash-looping.
+
+---
+
+## 5. Run it
 
 ```bash
 .venv/bin/python -m kbot
@@ -82,7 +119,7 @@ for a few windows before going anywhere near live.
 
 ---
 
-## 5. Keep it running
+## 6. Keep it running
 
 ### systemd (a plain VPS)
 
@@ -116,7 +153,7 @@ scale-to-zero — a trading bot must not sleep.
 
 ---
 
-## 6. Payments (optional)
+## 7. Payments (optional)
 
 Skip this entirely if you hand out keys yourself with `/genkeys`.
 
@@ -149,7 +186,7 @@ Test the path end to end with a small real payment before announcing it.
 
 ---
 
-## 7. The website
+## 8. The website
 
 `site/index.html` is a single self-contained file. Open it and set:
 
@@ -171,7 +208,7 @@ invented numbers as live quotes.
 
 ---
 
-## 8. Results channel (optional)
+## 9. Results channel (optional)
 
 Create a public Telegram channel, add the bot as an admin, then set:
 
@@ -189,7 +226,25 @@ Put the channel link into `site/index.html` where `RESULTS_CHANNEL_URL` is.
 
 ---
 
-## 9. Measure before you sell
+## 10. Record from day one
+
+Install the recorder as its own service, separate from the bot:
+
+```bash
+sudo cp deploy/directionalbot-recorder.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now directionalbot-recorder
+```
+
+Separate on purpose: you want data collecting whether or not the bot is
+trading, and a bot restart should not interrupt a recording. About 25 MB per
+day gzipped for all coins.
+
+This is the only thing that makes the profitability question answerable.
+
+---
+
+## 11. Measure before you sell
 
 ```bash
 python -m kbot.research record --interval 1      # leave running for days

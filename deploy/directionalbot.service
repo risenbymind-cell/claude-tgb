@@ -25,6 +25,9 @@ ExecStart=/opt/directionalbot/.venv/bin/python -m kbot
 # rather than killing it mid-order.
 Restart=always
 RestartSec=5
+# Exit code 2 means a configuration problem. Restarting cannot fix a typo in
+# .env, so stop instead of crash-looping and filling the journal.
+RestartPreventExitStatus=2
 TimeoutStopSec=30
 KillSignal=SIGTERM
 

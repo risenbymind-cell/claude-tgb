@@ -1,0 +1,49 @@
+# Market-data recorder — install alongside the bot to capture 24/7.
+#
+#   sudo cp deploy/directionalbot-recorder.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now directionalbot-recorder
+#
+# This is what makes the profitability question answerable. It writes one
+# gzipped file per UTC day (~25 MB for all coins) and records how every market
+# settled, which a replay needs in order to score a position held to expiry.
+#
+# It is a separate unit from the bot on purpose: you want the data collecting
+# from day one, whether or not the bot is trading, and a bot restart should not
+# interrupt a recording.
+
+[Unit]
+Description=DirectionalBot market-data recorder
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=directionalbot
+Group=directionalbot
+WorkingDirectory=/opt/directionalbot
+EnvironmentFile=/opt/directionalbot/.env
+ExecStart=/opt/directionalbot/.venv/bin/python -m kbot.research \
+          --dir /opt/directionalbot/data/recordings record --interval 1
+
+Restart=always
+RestartSec=10
+RestartPreventExitStatus=2
+# Give it time to flush the current gzip block cleanly on shutdown.
+TimeoutStopSec=20
+KillSignal=SIGTERM
+
+ReadWritePaths=/opt/directionalbot/data
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=directionalbot-recorder
+
+[Install]
+WantedBy=multi-user.target

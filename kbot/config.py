@@ -71,16 +71,44 @@ def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
     if raw is None or not raw.strip():
         return default
-    return int(raw)
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a whole number, got {raw!r}") from exc
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise ConfigError(f"{name} must be a number, got {raw!r}") from exc
+
+
+class ConfigError(RuntimeError):
+    """A configuration problem the operator has to fix.
+
+    Raised instead of letting a json or cryptography exception escape, so a
+    typo in .env produces one readable line rather than a stack trace — and so
+    the process can exit with a code systemd knows not to restart on.
+    """
 
 
 def _env_json(name: str, default: dict[str, str]) -> dict[str, str]:
     raw = os.getenv(name)
     if not raw:
         return dict(default)
-    parsed = json.loads(raw)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ConfigError(
+            f"{name} is not valid JSON ({exc.msg} at position {exc.pos}). "
+            f'Expected something like {{"BTC":"KXBTC15M"}}'
+        ) from exc
     if not isinstance(parsed, dict):
-        raise ValueError(f"{name} must be a JSON object")
+        raise ConfigError(f"{name} must be a JSON object, not {type(parsed).__name__}")
     return {str(k).upper(): str(v) for k, v in parsed.items()}
 
 
@@ -89,7 +117,13 @@ def _env_prices() -> dict[str, float]:
     raw = os.getenv("PRICES_USD")
     if not raw:
         return {}
-    return {str(k).lower(): float(v) for k, v in json.loads(raw).items()}
+    try:
+        parsed = json.loads(raw)
+        return {str(k).lower(): float(v) for k, v in parsed.items()}
+    except (json.JSONDecodeError, TypeError, ValueError, AttributeError) as exc:
+        raise ConfigError(
+            'PRICES_USD must be JSON like {"daily":25,"monthly":100}'
+        ) from exc
 
 
 @dataclass(frozen=True)
@@ -159,9 +193,31 @@ def _read_private_key() -> str | None:
         # Newlines commonly survive .env only as literal backslash-n.
         return inline.replace("\\n", "\n")
     path = os.getenv("KALSHI_PRIVATE_KEY_PATH")
-    if path:
-        return Path(path).expanduser().read_text()
-    return None
+    if not path:
+        return None
+    resolved = Path(path).expanduser()
+    try:
+        return resolved.read_text()
+    except FileNotFoundError as exc:
+        raise ConfigError(
+            f"KALSHI_PRIVATE_KEY_PATH points at {resolved}, which does not exist"
+        ) from exc
+    except OSError as exc:
+        raise ConfigError(f"Cannot read {resolved}: {exc}") from exc
+
+
+def _validate_master_key(key: str) -> None:
+    """Fail here, with an explanation, rather than deep inside Fernet."""
+    from cryptography.fernet import Fernet
+
+    try:
+        Fernet(key.encode())
+    except Exception as exc:  # noqa: BLE001 - any failure means the key is unusable
+        raise ConfigError(
+            "MASTER_KEY is not a valid Fernet key (it must be 32 url-safe "
+            "base64-encoded bytes). Generate one with: "
+            "python -m kbot.tools genkey"
+        ) from exc
 
 
 def load_settings() -> Settings:
@@ -175,10 +231,28 @@ def load_settings() -> Settings:
             "MASTER_KEY is required (generate one with: python -m kbot.tools genkey)"
         )
 
+    _validate_master_key(master_key)
+
     admin_raw = os.getenv("ADMIN_IDS", "")
-    admins = frozenset(
-        int(part) for part in admin_raw.replace(",", " ").split() if part.strip()
-    )
+    try:
+        admins = frozenset(
+            int(part) for part in admin_raw.replace(",", " ").split() if part.strip()
+        )
+    except ValueError as exc:
+        raise ConfigError(
+            f"ADMIN_IDS must be numeric Telegram user IDs, got {admin_raw!r}. "
+            "Get yours from @userinfobot."
+        ) from exc
+
+    provider = os.getenv("PAYMENT_PROVIDER", "manual").strip().lower()
+    if provider not in {"manual", "nowpayments"}:
+        raise ConfigError(
+            f"PAYMENT_PROVIDER must be 'manual' or 'nowpayments', got {provider!r}"
+        )
+
+    port = _env_int("WEBHOOK_PORT", 8080)
+    if not (1 <= port <= 65535):
+        raise ConfigError(f"WEBHOOK_PORT must be 1-65535, got {port}")
 
     return Settings(
         telegram_token=token,
@@ -188,14 +262,14 @@ def load_settings() -> Settings:
         demo=_env_bool("KALSHI_DEMO", False),
         series=_env_json("KALSHI_SERIES", DEFAULT_SERIES),
         spot_products=_env_json("SPOT_PRODUCTS", DEFAULT_SPOT_PRODUCTS),
-        payment_provider=os.getenv("PAYMENT_PROVIDER", "manual").strip().lower(),
+        payment_provider=provider,
         nowpayments_api_key=os.getenv("NOWPAYMENTS_API_KEY") or None,
         nowpayments_ipn_secret=os.getenv("NOWPAYMENTS_IPN_SECRET") or None,
         payment_callback_url=os.getenv("PAYMENT_CALLBACK_URL") or None,
         manual_addresses=_env_json("MANUAL_PAY_ADDRESSES", {}),
         prices=_env_prices(),
         webhook_host=os.getenv("WEBHOOK_HOST", "0.0.0.0"),
-        webhook_port=_env_int("WEBHOOK_PORT", 8080),
+        webhook_port=port,
         webhook_path=os.getenv("WEBHOOK_PATH", "/webhook/payment"),
         bot_username=(os.getenv("BOT_USERNAME") or "").lstrip("@") or None,
         results_chat_id=os.getenv("RESULTS_CHAT_ID") or None,
@@ -203,8 +277,8 @@ def load_settings() -> Settings:
         results_min_net_cents=_env_int("RESULTS_MIN_NET_CENTS", 0),
         md_key_id=os.getenv("KALSHI_API_KEY_ID") or None,
         md_private_key=_read_private_key(),
-        scan_interval_s=float(os.getenv("SCAN_INTERVAL_S", "1.0")),
-        discovery_interval_s=float(os.getenv("DISCOVERY_INTERVAL_S", "20")),
-        orderbook_poll_interval_s=float(os.getenv("ORDERBOOK_POLL_INTERVAL_S", "2")),
+        scan_interval_s=_env_float("SCAN_INTERVAL_S", 1.0),
+        discovery_interval_s=_env_float("DISCOVERY_INTERVAL_S", 20.0),
+        orderbook_poll_interval_s=_env_float("ORDERBOOK_POLL_INTERVAL_S", 2.0),
         require_access_key=_env_bool("REQUIRE_ACCESS_KEY", True),
     )

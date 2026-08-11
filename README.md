@@ -258,7 +258,7 @@ pip install pytest pytest-asyncio
 python -m pytest
 ```
 
-245 tests, no network required, covering:
+264 tests, no network required, covering:
 
 - price/unit conversion and the order-book maths
 - the fee model, pinned to fee figures read off real fills
@@ -275,6 +275,7 @@ python -m pytest
   answers
 - calibration, including that it can tell an efficiently priced market from a
   rigged one
+- configuration validation, and that a bad value exits 2 without a traceback
 - rate-limit pacing, and reconciliation against every divergence it can find
 - that the results channel posts losses by default
 
@@ -349,9 +350,24 @@ username, account detail or size attribution.
 
 ## Deploying
 
+Run the preflight first — it validates config, checks the database opens with
+your `MASTER_KEY`, confirms Kalshi and Telegram are reachable, and exits
+non-zero if anything is broken:
+
+```bash
+python -m kbot.tools doctor
+```
+
+Configuration problems exit with code `2` and print one line naming the
+variable, and the service units carry `RestartPreventExitStatus=2` so a typo in
+`.env` stops the service rather than crash-looping.
+
 `deploy/` has a hardened systemd unit, a Caddyfile that terminates TLS and
 serves the landing page alongside the payment webhook, and a `fly.toml` pinned
 to Chicago (`ord`) with scale-to-zero disabled. `docker compose up -d` works too.
+
+`deploy/directionalbot-recorder.service` runs the market-data recorder as its
+own service, so data collects from day one whether or not the bot is trading.
 
 The bot exposes `/healthz` on port 8080 for health checks. It only needs an
 inbound port at all if you take payment callbacks.
