@@ -19,6 +19,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
+from ..kalshi.fees import fee_dc, min_profitable_exit_dc
 from ..kalshi.prices import cents_to_dc, clamp_price, format_cents, format_dollars
 from ..storage import Storage, Trade, User
 
@@ -64,7 +65,9 @@ class RiskManager:
         for t in await self.storage.open_trades(user.tg_id):
             if all(t.id != o.id for o in open_trades):
                 open_trades.append(t)
-        exposure = sum(t.entry_price_dc * t.count for t in open_trades)
+        # Exposure is what leaving the position open has actually cost:
+        # the contracts plus the fee already paid to get in.
+        exposure = sum(t.entry_price_dc * t.count + t.entry_fee_dc for t in open_trades)
         in_window = len([t for t in today if t.ticker == ticker]) if ticker else 0
         return RiskSnapshot(
             realised_today_dc=realised,
@@ -113,7 +116,7 @@ class RiskManager:
         if snap.trades_this_window >= int(user.get("max_trades_per_window")):
             return RiskDecision.block("per-window trade limit reached")
 
-        cost = entry_price_dc * requested
+        cost = entry_price_dc * requested + fee_dc(requested, entry_price_dc)
         exposure_cap_dc = cents_to_dc(user.get("max_exposure_cents"))
         room = exposure_cap_dc - snap.open_exposure_dc
         if room <= 0:
@@ -122,7 +125,7 @@ class RiskManager:
             requested = room // entry_price_dc
             if requested < 1:
                 return RiskDecision.block("exposure cap leaves no room for 1 contract")
-            cost = entry_price_dc * requested
+            cost = entry_price_dc * requested + fee_dc(requested, entry_price_dc)
 
         # Balance checks only apply to live trading; paper mode has no balance.
         if balance_dc is not None:
@@ -141,12 +144,22 @@ class RiskManager:
         return RiskDecision.allow(int(requested))
 
 
-def exit_price_for(user: User, entry_price_dc: int) -> int:
-    """The price at which a position should be closed, per the user's settings."""
+def exit_price_for(user: User, entry_price_dc: int, count: int = 1) -> int:
+    """The price at which a position should be closed, per the user's settings.
+
+    Raised to the first price that actually clears both trading fees when the
+    user's own target would not. A "+2c" exit sounds like a small win but is a
+    guaranteed loss once the round trip is paid for, and silently booking those
+    is the difference between a bot that looks profitable and one that is.
+    """
     if user.get("exit_mode") == "target":
         target_dc = cents_to_dc(user.get("target_price"))
     else:
         target_dc = entry_price_dc + cents_to_dc(user.get("profit_cents"))
+
+    breakeven = min_profitable_exit_dc(count, entry_price_dc)
+    if breakeven is not None:
+        target_dc = max(target_dc, breakeven)
     # An exit must beat the entry, and must stay inside the settlement bounds.
     return clamp_price(max(entry_price_dc + 1, target_dc))
 

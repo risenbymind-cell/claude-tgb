@@ -15,6 +15,7 @@ from kbot.config import Settings
 from kbot.engine.discovery import LiveMarket
 from kbot.engine.runner import Engine
 from kbot.kalshi.orderbook import OrderBook
+from kbot.kalshi.fees import fee_dc as estimate_fee_dc, net_pnl_dc
 from kbot.kalshi.prices import dc_to_dollars
 from kbot.storage import Storage
 
@@ -124,7 +125,14 @@ async def test_auto_mode_opens_a_paper_position(harness):
     assert trade.entry_price_dc == 480  # $1.00 - best NO bid
     assert trade.target_price_dc == 480 + 80  # default profit_cents (8c)
     assert trade.exit_order_id is not None  # exit resting immediately
-    assert "PAPER" in harness.messages[0][1]
+    # The entry fee is charged and recorded, not ignored.
+    assert trade.entry_fee_dc == estimate_fee_dc(2, 480)
+
+    text = harness.messages[0][1]
+    assert "Trade Taken!" in text
+    assert "Paper" in text and "Drift" in text
+    assert "2 sh @ 48c" in text
+    assert "est. fee" in text
 
 
 async def test_only_one_signal_per_market_window(harness):
@@ -215,10 +223,19 @@ async def test_position_closes_when_the_target_is_bid(harness):
     closed = (await harness.storage.trades_since(1, 0))[0]
     assert closed.status == "closed"
     assert closed.exit_price_dc == trade.target_price_dc
-    assert closed.pnl_dc == (
+    # Gross is the raw move; the booked number is net of both fees.
+    assert closed.gross_pnl_dc == (
         trade.target_price_dc - trade.entry_price_dc
     ) * trade.count
-    assert "✅" in harness.messages[-1][1]
+    assert closed.pnl_dc == net_pnl_dc(
+        trade.count, trade.entry_price_dc, trade.target_price_dc
+    )
+    assert closed.pnl_dc < closed.gross_pnl_dc  # fees were actually charged
+
+    text = harness.messages[-1][1]
+    assert "CASHED OUT" in text
+    assert "locked" in text
+    assert "fees" in text
 
 
 async def test_position_stays_open_below_the_target(harness):
@@ -258,8 +275,10 @@ async def test_expired_window_settles_from_the_market_result(harness):
     closed = (await harness.storage.trades_since(1, 0))[0]
     assert closed.status == "expired"
     assert closed.exit_price_dc == 0  # held YES, market settled NO
-    assert closed.pnl_dc == -trade.entry_price_dc * trade.count
-    assert "❌" in harness.messages[-1][1]
+    # Settlement is free, so the loss is the stake plus the entry fee only.
+    assert closed.exit_fee_dc == 0
+    assert closed.pnl_dc == -trade.entry_price_dc * trade.count - trade.entry_fee_dc
+    assert "CLOSED" in harness.messages[-1][1]
 
 
 async def test_unsettled_expired_market_is_left_alone(harness):

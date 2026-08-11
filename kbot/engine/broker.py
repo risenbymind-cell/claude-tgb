@@ -17,6 +17,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Protocol
 
+from ..kalshi.fees import fee_dc as estimate_fee_dc
 from ..kalshi.orderbook import OrderBook
 from ..kalshi.prices import format_cents
 from ..kalshi.rest import KalshiClient, KalshiError
@@ -30,6 +31,8 @@ class OrderResult:
     order_id: str | None = None
     filled: int = 0
     price_dc: int | None = None
+    #: Trading fee actually charged (live) or estimated (paper), in deci-cents.
+    fee_dc: int = 0
     error: str | None = None
 
 
@@ -85,14 +88,18 @@ class PaperBroker:
             return OrderResult(ok=False, error="no size at the offer")
 
         order_id = f"paper-{uuid.uuid4().hex[:12]}"
+        fee = estimate_fee_dc(filled, ask)
         self.orders[order_id] = {
             "ticker": ticker,
             "side": side,
             "count": filled,
             "price_dc": ask,
+            "fee_dc": fee,
             "ts": time.time(),
         }
-        return OrderResult(ok=True, order_id=order_id, filled=filled, price_dc=ask)
+        return OrderResult(
+            ok=True, order_id=order_id, filled=filled, price_dc=ask, fee_dc=fee
+        )
 
     async def sell(
         self, ticker: str, side: str, count: int, price_dc: int, book: OrderBook | None
@@ -149,11 +156,15 @@ class LiveBroker:
                 order_id=order.get("order_id"),
                 error="order did not fill at the limit",
             )
+        fill_price = order.get("avg_price_dc") or price_dc
+        fee = order.get("fee_dc")
         return OrderResult(
             ok=True,
             order_id=order.get("order_id"),
             filled=filled,
-            price_dc=order.get("avg_price_dc") or price_dc,
+            price_dc=fill_price,
+            # Fall back to the exchange's own formula if it did not report one.
+            fee_dc=fee if fee is not None else estimate_fee_dc(filled, fill_price),
         )
 
     async def sell(
@@ -170,9 +181,12 @@ class LiveBroker:
             )
         except KalshiError as exc:
             return OrderResult(ok=False, error=str(exc))
+        filled = int(order["fill_count"])
+        fee = order.get("fee_dc")
         return OrderResult(
             ok=True,
             order_id=order.get("order_id"),
-            filled=int(order["fill_count"]),
+            filled=filled,
             price_dc=price_dc,
+            fee_dc=(fee if fee is not None else estimate_fee_dc(filled, price_dc)),
         )

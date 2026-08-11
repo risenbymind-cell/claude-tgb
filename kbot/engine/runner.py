@@ -21,6 +21,7 @@ import httpx
 
 from ..config import Settings
 from ..kalshi.auth import InvalidPrivateKey, Signer
+from ..kalshi.fees import fee_dc as estimate_fee_dc
 from ..kalshi.prices import format_cents, format_dollars
 from ..kalshi.rest import KalshiClient, KalshiError
 from ..kalshi.ws import BookHistory, MarketFeed
@@ -267,7 +268,7 @@ class Engine:
             return
 
         entry_dc = int(result.price_dc or signal.price_dc)
-        target_dc = exit_price_for(user, entry_dc)
+        target_dc = exit_price_for(user, entry_dc, result.filled)
         trade_id = await self.storage.record_entry(
             tg_id=user.tg_id,
             ticker=signal.ticker,
@@ -276,6 +277,7 @@ class Engine:
             count=result.filled,
             entry_price_dc=entry_dc,
             target_price_dc=target_dc,
+            entry_fee_dc=result.fee_dc,
             paper=broker.paper,
             entry_order_id=result.order_id,
             reason=signal.reason,
@@ -288,16 +290,17 @@ class Engine:
         if exit_order.ok and exit_order.order_id:
             await self.storage.set_exit_order(trade_id, exit_order.order_id)
 
-        tag = "📝 PAPER" if broker.paper else "⚡ LIVE"
-        cost_dc = entry_dc * result.filled
         await self.notify(
             user.tg_id,
-            f"{tag} · <b>{signal.coin} {signal.direction}</b>\n"
-            f"Bought <b>{result.filled}</b> × {signal.side.upper()} @ "
-            f"<b>{format_cents(entry_dc)}</b> (${format_dollars(cost_dc)})\n"
-            f"Exit resting at <b>{format_cents(target_dc)}</b>\n"
-            f"<i>{signal.reason}</i>\n"
-            f"<code>{signal.ticker}</code>",
+            _format_entry(
+                signal,
+                strategy=str(user.get("strategy")),
+                paper=broker.paper,
+                count=result.filled,
+                entry_dc=entry_dc,
+                fee_dc=result.fee_dc,
+                target_dc=target_dc,
+            ),
         )
 
     async def _broker_for(self, user: User, paper: bool | None = None) -> Broker | None:
@@ -379,7 +382,12 @@ class Engine:
             bid = book.best_bid(trade.side)
             # A resting sell fills once someone bids at or above our ask.
             if bid is not None and bid >= target_dc:
-                await self._close(trade, target_dc, "target hit")
+                await self._close(
+                    trade,
+                    target_dc,
+                    "target hit",
+                    exit_fee_dc=estimate_fee_dc(trade.count, target_dc),
+                )
                 return
         await self._settle_if_expired(trade)
 
@@ -398,7 +406,13 @@ class Engine:
             if status in {"executed", "filled"} or (
                 remaining is not None and int(remaining) == 0 and status != "canceled"
             ):
-                await self._close(trade, trade.target_price_dc or 999, "target hit")
+                target_dc = trade.target_price_dc or 999
+                await self._close(
+                    trade,
+                    target_dc,
+                    "target hit",
+                    exit_fee_dc=estimate_fee_dc(trade.count, target_dc),
+                )
                 return
         await self._settle_if_expired(trade)
 
@@ -419,30 +433,97 @@ class Engine:
             return  # not settled yet; check again next pass
 
         # A settled contract is worth $1.00 on the winning side, nothing on the
-        # losing one.
+        # losing one. Settlement itself is free — Kalshi charges on trades only,
+        # so a position held to expiry pays the entry fee and nothing more.
         settle_dc = 1000 if result == trade.side else 0
-        await self._close(trade, settle_dc, f"settled {result.upper()}", "expired")
+        await self._close(
+            trade,
+            settle_dc,
+            f"settled {result.upper()}",
+            status="expired",
+            exit_fee_dc=0,
+        )
 
     async def _close(
-        self, trade: Trade, exit_price_dc: int, reason: str, status: str = "closed"
+        self,
+        trade: Trade,
+        exit_price_dc: int,
+        reason: str,
+        status: str = "closed",
+        exit_fee_dc: int = 0,
     ) -> None:
         closed = await self.storage.close_trade(
-            trade.id, exit_price_dc=exit_price_dc, status=status
+            trade.id,
+            exit_price_dc=exit_price_dc,
+            exit_fee_dc=exit_fee_dc,
+            status=status,
         )
         if closed is None:
             return  # someone else closed it first
-        pnl_dc = closed.pnl_dc or 0
-        icon = "✅" if pnl_dc > 0 else ("➖" if pnl_dc == 0 else "❌")
-        tag = "📝 PAPER" if closed.paper else "⚡ LIVE"
-        sign = "+" if pnl_dc >= 0 else "-"
-        await self.notify(
-            closed.tg_id,
-            f"{icon} {tag} · <b>{closed.coin} "
-            f"{'UP' if closed.side == 'yes' else 'DOWN'}</b> closed\n"
-            f"{closed.count} × {format_cents(closed.entry_price_dc)} → "
-            f"<b>{format_cents(exit_price_dc)}</b> ({reason})\n"
-            f"P/L <b>{sign}${format_dollars(abs(pnl_dc))}</b>",
-        )
+        user = await self.storage.get_user(trade.tg_id)
+        strategy = str(user.get("strategy")) if user else ""
+        await self.notify(closed.tg_id, _format_exit(closed, reason, strategy))
+
+
+STRATEGY_LABELS = {"drift": "Drift", "fade": "Fade", "hammer": "Hammer"}
+
+
+def _label(strategy: str) -> str:
+    return STRATEGY_LABELS.get(strategy, strategy.title())
+
+
+def _format_entry(
+    signal: Signal,
+    *,
+    strategy: str,
+    paper: bool,
+    count: int,
+    entry_dc: int,
+    fee_dc: int,
+    target_dc: int,
+) -> str:
+    """Entry confirmation, itemised the way a fill actually costs.
+
+    Cost, fee and total are shown separately because the fee is a real part of
+    the trade — on these markets it is a meaningful share of the move.
+    """
+    cost_dc = entry_dc * count
+    tag = "📝 Paper" if paper else "⚡ Live"
+    return (
+        "🟢 <b>Trade Taken!</b>\n"
+        f"{tag} · {_label(strategy)} · <b>{signal.coin} {signal.direction}</b>\n"
+        f"{count} sh @ {format_cents(entry_dc)} · cost ${format_dollars(cost_dc)}\n"
+        f"est. fee ${format_dollars(fee_dc)} · "
+        f"total ${format_dollars(cost_dc + fee_dc)}\n"
+        f"target {format_cents(target_dc)} · <i>{signal.reason}</i>"
+    )
+
+
+def _format_exit(trade, reason: str, strategy: str) -> str:
+    """Exit confirmation. The headline number is net of both fees."""
+    pnl_dc = trade.pnl_dc or 0
+    gross_dc = trade.gross_pnl_dc or 0
+    fees_dc = (trade.entry_fee_dc or 0) + (trade.exit_fee_dc or 0)
+    up = trade.side == "yes"
+    arrow = "📈" if up else "📉"
+    direction = "UP" if up else "DOWN"
+    tag = "📝" if trade.paper else "⚡"
+
+    if pnl_dc > 0:
+        head, verdict = "💰 <b>CASHED OUT</b>", f"locked <b>+${format_dollars(pnl_dc)}</b> 🔒"
+    elif pnl_dc == 0:
+        head, verdict = "➖ <b>CLOSED</b>", "flat"
+    else:
+        head, verdict = "🔻 <b>CLOSED</b>", f"lost <b>-${format_dollars(abs(pnl_dc))}</b>"
+
+    return (
+        f"{head} · <b>{trade.coin} {direction}</b>\n"
+        f"{tag} {_label(strategy)} · {trade.coin} {arrow} {direction} · "
+        f"{trade.count} sh @ {format_cents(trade.entry_price_dc)}\n"
+        f"🏷 Exit @ {format_cents(trade.exit_price_dc or 0)} ({reason})\n"
+        f"gross ${format_dollars(gross_dc)} · fees ${format_dollars(fees_dc)}\n"
+        f"{verdict}"
+    )
 
 
 def _signal_header(signal: Signal, ctx: MarketContext) -> str:

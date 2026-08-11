@@ -200,6 +200,11 @@ configured. It works; the websocket is just faster.
 when a stored key stops authenticating, when live mode is on with no credentials
 connected, or when the user blocks the bot.
 
+**Profits look smaller than the price move** — they should. Kalshi's fee is
+charged on entry and exit, and near mid-book it costs about 4c of round-trip
+movement. `/pnl` breaks out gross, fees and net so you can see it. Targets below
+the fee floor are raised automatically rather than booked as losing "wins".
+
 **Everything looks right but no trades** — that's normal. The filters skip wide
 spreads, thin books, the first and last minutes of a window, and setups where
 the signal components disagree. Watch `/status` to confirm books are live.

@@ -60,7 +60,7 @@ class Filters:
         return None
 
 
-class DirectionalStrategy:
+class DriftStrategy:
     """Momentum: trade with the book, not against it.
 
     Score combines three normalised, independent reads:
@@ -73,7 +73,7 @@ class DirectionalStrategy:
     drifting DOWN is exactly the ambiguous setup worth skipping.
     """
 
-    name = "directional"
+    name = "drift"
     description = "Momentum — trades with book imbalance and short-horizon drift."
 
     # Normalisers: the move size at which a component counts as "full strength",
@@ -152,7 +152,7 @@ class DirectionalStrategy:
 class FadeStrategy:
     """Mean reversion: fade an overextended move late in the window.
 
-    The mirror image of `DirectionalStrategy`, included so the presets are not a
+    The mirror image of `DriftStrategy`, included so the presets are not a
     single idea wearing two hats. It only acts when a sharp short-horizon move
     has run against a book that has *not* followed it — the classic thin-book
     overshoot — and only in the back half of the window.
@@ -207,6 +207,82 @@ class FadeStrategy:
             detail={
                 "score": score,
                 "move_60s": move,
+                "imbalance": imbalance,
+                "seconds_left": ctx.seconds_to_close,
+            },
+        )
+
+
+class HammerStrategy:
+    """Follow a decisive one-sided sweep.
+
+    Drift asks whether price has been moving; Fade asks whether it has moved too
+    far. Hammer asks a different question: has one side just been *taken out*?
+
+    The setup is a sharp impulse in fair value that coincides with the opposite
+    ladder thinning — someone lifting offers rather than price drifting on thin
+    volume. That combination is short-lived, so this preset only fires on a
+    strong recent impulse and requires the book to have visibly emptied on the
+    side being run over.
+
+    Like the others: a documented reference implementation, not a validated
+    edge. Every threshold below is a knob.
+    """
+
+    name = "hammer"
+    description = "Sweep-follow — trades a sharp impulse that clears one side of the book."
+
+    IMPULSE_DC = 20.0  # a 2c move in 5s is a sweep, not drift
+    MIN_IMBALANCE = 0.30  # the book must clearly favour the sweep direction
+    MIN_SCORE = 0.40
+
+    def __init__(self, filters: Filters | None = None) -> None:
+        # A sweep is worth following only with time left for it to carry.
+        self.filters = filters or Filters(min_seconds_left=150.0)
+
+    def evaluate(self, ctx: MarketContext) -> Signal | None:
+        if self.filters.reject(ctx) is not None:
+            return None
+
+        book = ctx.book
+        impulse = ctx.fv_change_5s
+        drift = ctx.fv_change_20s
+        imbalance = book.imbalance()
+        if impulse is None or drift is None or imbalance is None:
+            return None
+
+        if abs(impulse) < self.IMPULSE_DC:
+            return None
+        # The impulse must be the sharp end of the move, not the tail of one
+        # that has already played out.
+        if drift != 0 and abs(impulse) < abs(drift) * 0.5:
+            return None
+
+        direction = 1 if impulse > 0 else -1
+        # Depth must sit behind the sweep, not against it.
+        if imbalance * direction < self.MIN_IMBALANCE:
+            return None
+
+        score = _clamp(abs(impulse) / (2 * self.IMPULSE_DC)) * _clamp(abs(imbalance))
+        if score < self.MIN_SCORE:
+            return None
+
+        side = "yes" if direction > 0 else "no"
+        price = book.best_ask(side)
+        if price is None or not (self.filters.min_price <= price <= self.filters.max_price):
+            return None
+
+        return Signal(
+            coin=ctx.coin,
+            ticker=ctx.ticker,
+            side=side,
+            confidence=_clamp(score),
+            price_dc=price,
+            reason=f"5s sweep {impulse/10:+.1f}c with book {imbalance:+.2f} behind it",
+            detail={
+                "score": score,
+                "impulse_5s": impulse,
+                "drift_20s": drift,
                 "imbalance": imbalance,
                 "seconds_left": ctx.seconds_to_close,
             },

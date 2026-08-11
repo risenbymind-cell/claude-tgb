@@ -53,7 +53,7 @@ async def test_mode_and_strategy_toggles_persist(bot):
 async def test_unknown_strategy_is_ignored(bot):
     u = await user(bot)
     assert await bot._apply_setting(u, "strategy", "nonsense") is None
-    assert (await bot.storage.get_user(1)).get("strategy") == "directional"
+    assert (await bot.storage.get_user(1)).get("strategy") == "drift"
 
 
 async def test_going_live_requires_credentials(bot):

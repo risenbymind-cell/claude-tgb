@@ -1,9 +1,12 @@
 from .base import MarketContext, Signal, Strategy
-from .directional import DirectionalStrategy, FadeStrategy, Filters
+from .directional import DriftStrategy, FadeStrategy, Filters, HammerStrategy
 
 REGISTRY: dict[str, Strategy] = {
-    s.name: s for s in (DirectionalStrategy(), FadeStrategy())
+    s.name: s for s in (DriftStrategy(), FadeStrategy(), HammerStrategy())
 }
+
+#: Strategy names that have been renamed, so a user's saved setting survives.
+ALIASES = {"directional": "drift"}
 
 
 def get_strategy(name: str) -> Strategy:
@@ -12,7 +15,7 @@ def get_strategy(name: str) -> Strategy:
     A user's saved strategy name can outlive the strategy itself after a deploy;
     falling back keeps their bot trading instead of silently erroring every tick.
     """
-    return REGISTRY.get(name, REGISTRY["directional"])
+    return REGISTRY.get(ALIASES.get(name, name), REGISTRY["drift"])
 
 
 def strategy_names() -> list[str]:
@@ -20,9 +23,11 @@ def strategy_names() -> list[str]:
 
 
 __all__ = [
+    "ALIASES",
     "REGISTRY",
-    "DirectionalStrategy",
+    "DriftStrategy",
     "FadeStrategy",
+    "HammerStrategy",
     "Filters",
     "MarketContext",
     "Signal",

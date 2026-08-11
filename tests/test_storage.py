@@ -127,15 +127,18 @@ async def test_trade_lifecycle_computes_pnl(storage):
         count=3,
         entry_price_dc=450,
         target_price_dc=530,
+        entry_fee_dc=90,
         paper=True,
         entry_order_id="o1",
         reason="test",
     )
     assert len(await storage.open_trades(1)) == 1
 
-    closed = await storage.close_trade(trade_id, exit_price_dc=530)
+    closed = await storage.close_trade(trade_id, exit_price_dc=530, exit_fee_dc=60)
     assert closed is not None
-    assert closed.pnl_dc == (530 - 450) * 3
+    # Gross is the move; P/L is booked after both fees.
+    assert closed.gross_pnl_dc == (530 - 450) * 3
+    assert closed.pnl_dc == (530 - 450) * 3 - 90 - 60
     assert closed.status == "closed"
     assert await storage.open_trades(1) == []
 
@@ -151,6 +154,7 @@ async def test_closing_twice_is_a_no_op(storage):
         count=1,
         entry_price_dc=400,
         target_price_dc=500,
+        entry_fee_dc=0,
         paper=True,
         entry_order_id=None,
         reason=None,
@@ -170,6 +174,7 @@ async def test_trades_since_filters_by_time(storage):
         count=1,
         entry_price_dc=400,
         target_price_dc=500,
+        entry_fee_dc=0,
         paper=True,
         entry_order_id=None,
         reason=None,

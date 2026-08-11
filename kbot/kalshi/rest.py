@@ -232,12 +232,19 @@ class KalshiClient:
             # Translate the YES-quoted fill back onto our side.
             avg_price_dc = self._to_book_price_dc(side, book_price_dc)
 
+        # average_fee_paid is per contract; the bot tracks the total actually
+        # charged so P/L is never an estimate when the exchange has told us.
+        fee_dc: int | None = None
+        if data.get("average_fee_paid") is not None and fill_count > 0:
+            fee_dc = round(dollars_to_dc(data["average_fee_paid"]) * fill_count)
+
         return {
             "order_id": data.get("order_id"),
             "client_order_id": data.get("client_order_id"),
             "fill_count": fill_count,
             "remaining_count": parse_count(data.get("remaining_count", 0)),
             "avg_price_dc": avg_price_dc,
+            "fee_dc": fee_dc,
             "raw": data,
         }
 

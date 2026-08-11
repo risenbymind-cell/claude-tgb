@@ -24,6 +24,7 @@ async def open_trade(storage, **overrides):
         count=1,
         entry_price_dc=500,
         target_price_dc=580,
+        entry_fee_dc=0,
         paper=True,
         entry_order_id=None,
         reason=None,
@@ -158,7 +159,26 @@ def test_exit_price_is_clamped_below_the_settlement_bound():
 
 def test_exit_price_always_beats_entry():
     user = FakeUser(exit_mode="target", profit_cents=5, target_price=30)
-    assert exit_price_for(user, 600) == 601
+    assert exit_price_for(user, 600) > 600
+
+
+def test_exit_target_is_raised_to_clear_the_round_trip_fee():
+    """A target that loses money after fees is not honoured as-is.
+
+    +2c gross on a single contract is under the fee for the round trip, so the
+    bot would be booking "wins" that shrink the account.
+    """
+    from kbot.kalshi.fees import net_pnl_dc
+
+    user = FakeUser(exit_mode="profit", profit_cents=2, target_price=90)
+    target = exit_price_for(user, 500, count=1)
+    assert target > 520  # not the naive +2c
+    assert net_pnl_dc(1, 500, target) > 0
+
+
+def test_a_target_that_already_clears_fees_is_left_alone():
+    user = FakeUser(exit_mode="profit", profit_cents=20, target_price=90)
+    assert exit_price_for(user, 500, count=50) == 700
 
 
 def test_start_of_utc_day_is_midnight():

@@ -56,7 +56,10 @@ CREATE TABLE IF NOT EXISTS trades (
     paper           INTEGER NOT NULL,
     opened_at       REAL NOT NULL,
     closed_at       REAL,
+    entry_fee_dc    INTEGER NOT NULL DEFAULT 0,
+    exit_fee_dc     INTEGER,
     pnl_dc          INTEGER,
+    gross_pnl_dc    INTEGER,
     entry_order_id  TEXT,
     exit_order_id   TEXT,
     reason          TEXT
@@ -102,7 +105,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "paper": True,
     "mode": "manual",  # "manual" | "auto"
     "coins": ["BTC", "ETH"],
-    "strategy": "directional",
+    "strategy": "drift",
     "contracts": 1,
     "max_entry_price": 65,  # never pay more than this many cents
     "min_entry_price": 25,
@@ -175,7 +178,10 @@ class Trade:
     paper: bool
     opened_at: float
     closed_at: float | None
-    pnl_dc: int | None
+    entry_fee_dc: int
+    exit_fee_dc: int | None
+    pnl_dc: int | None  # net of fees
+    gross_pnl_dc: int | None
     entry_order_id: str | None
     exit_order_id: str | None
     reason: str | None
@@ -429,6 +435,7 @@ class Storage:
         count: int,
         entry_price_dc: int,
         target_price_dc: int | None,
+        entry_fee_dc: int,
         paper: bool,
         entry_order_id: str | None,
         reason: str | None,
@@ -436,8 +443,9 @@ class Storage:
         def work() -> int:
             cur = self._conn.execute(
                 "INSERT INTO trades (tg_id, ticker, coin, side, count, entry_price_dc,"
-                " target_price_dc, status, paper, opened_at, entry_order_id, reason)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)",
+                " target_price_dc, entry_fee_dc, status, paper, opened_at,"
+                " entry_order_id, reason)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?)",
                 (
                     tg_id,
                     ticker,
@@ -446,6 +454,7 @@ class Storage:
                     count,
                     entry_price_dc,
                     target_price_dc,
+                    entry_fee_dc,
                     1 if paper else 0,
                     time.time(),
                     entry_order_id,
@@ -462,6 +471,7 @@ class Storage:
         trade_id: int,
         *,
         exit_price_dc: int,
+        exit_fee_dc: int = 0,
         status: str = "closed",
         exit_order_id: str | None = None,
     ) -> Trade | None:
@@ -471,12 +481,25 @@ class Storage:
             ).fetchone()
             if row is None or row["status"] != "open":
                 return None
-            pnl = (exit_price_dc - row["entry_price_dc"]) * row["count"]
+            gross = (exit_price_dc - row["entry_price_dc"]) * row["count"]
+            # P/L is booked net of both fees. Reporting gross would flatter
+            # every result, and on a 15-minute market the round trip is a
+            # meaningful share of the move.
+            net = gross - (row["entry_fee_dc"] or 0) - int(exit_fee_dc)
             self._conn.execute(
-                "UPDATE trades SET exit_price_dc = ?, status = ?, closed_at = ?,"
-                " pnl_dc = ?, exit_order_id = COALESCE(?, exit_order_id)"
-                " WHERE id = ?",
-                (exit_price_dc, status, time.time(), pnl, exit_order_id, trade_id),
+                "UPDATE trades SET exit_price_dc = ?, exit_fee_dc = ?, status = ?,"
+                " closed_at = ?, pnl_dc = ?, gross_pnl_dc = ?,"
+                " exit_order_id = COALESCE(?, exit_order_id) WHERE id = ?",
+                (
+                    exit_price_dc,
+                    int(exit_fee_dc),
+                    status,
+                    time.time(),
+                    net,
+                    gross,
+                    exit_order_id,
+                    trade_id,
+                ),
             )
             self._conn.commit()
             return _row_to_trade(
@@ -741,7 +764,10 @@ def _row_to_trade(row: sqlite3.Row) -> Trade:
         paper=bool(row["paper"]),
         opened_at=row["opened_at"],
         closed_at=row["closed_at"],
+        entry_fee_dc=row["entry_fee_dc"] or 0,
+        exit_fee_dc=row["exit_fee_dc"],
         pnl_dc=row["pnl_dc"],
+        gross_pnl_dc=row["gross_pnl_dc"],
         entry_order_id=row["entry_order_id"],
         exit_order_id=row["exit_order_id"],
         reason=row["reason"],

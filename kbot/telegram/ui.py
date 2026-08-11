@@ -43,10 +43,16 @@ def dashboard_text(user: User, settings: Settings, engine_note: str = "") -> str
     strategy = str(user.get("strategy"))
     strat_desc = REGISTRY[strategy].description if strategy in REGISTRY else ""
 
+    from ..kalshi.fees import breakeven_cents
+
+    contracts = max(1, int(user.get("contracts")))
     if user.get("exit_mode") == "target":
         exit_line = f"sell at {user.get('target_price')}c"
     else:
         exit_line = f"sell at entry +{user.get('profit_cents')}c"
+    drag = breakeven_cents(contracts, 500)
+    if drag != float("inf"):
+        exit_line += f" <i>(~{drag:.0f}c breakeven after fees)</i>"
 
     running = "🟢 RUNNING" if user.enabled else "⚪️ STOPPED"
     access = access_line(user)
@@ -196,7 +202,8 @@ def size_keyboard(user: User) -> dict:
     )
 
 
-PROFIT_CHOICES = [3, 5, 8, 12, 20]
+# 3c is deliberately absent: it never clears the round-trip fee.
+PROFIT_CHOICES = [5, 8, 12, 20, 30]
 TARGET_CHOICES = [70, 80, 90, 95, 99]
 
 
@@ -224,6 +231,11 @@ def exit_keyboard(user: User) -> dict:
 
 
 def exit_text(user: User) -> str:
+    from ..kalshi.fees import breakeven_cents
+
+    count = max(1, int(user.get("contracts")))
+    # Quote the fee drag at a mid price, which is where these markets trade.
+    drag = breakeven_cents(count, 500)
     return (
         "<b>Exit rules</b>\n\n"
         "A sell order is placed the moment an entry fills, so a position is "
@@ -232,8 +244,12 @@ def exit_text(user: User) -> str:
         "contract.\n"
         "• <b>Target price</b> — sells at one absolute price regardless of "
         "entry.\n\n"
+        f"⚠️ Kalshi's trading fee means a round trip near 50c needs about "
+        f"<b>{drag:.0f}c</b> of movement just to break even at your size. "
+        "Targets below that are raised automatically — the bot will not book a "
+        "'win' that loses money after fees.\n\n"
         "If neither fills before the window closes, the market settles at "
-        "100c or 0c and the bot books the result."
+        "$1.00 or $0, and settlement itself is free."
     )
 
 
@@ -297,9 +313,11 @@ def positions_text(open_trades: list[Trade], recent: list[Trade]) -> str:
         tag = "📝" if t.paper else "⚡"
         direction = "UP" if t.side == "yes" else "DOWN"
         lines.append(
-            f"{tag} <b>{t.coin} {direction}</b> — {t.count} × "
+            f"{tag} <b>{t.coin} {direction}</b> — {t.count} sh @ "
             f"{format_cents(t.entry_price_dc)} → target "
-            f"{format_cents(t.target_price_dc or 0)}\n<code>{t.ticker}</code>"
+            f"{format_cents(t.target_price_dc or 0)}\n"
+            f"   fee paid ${format_dollars(t.entry_fee_dc)}"
+            f"\n<code>{t.ticker}</code>"
         )
 
     closed = [t for t in recent if t.status != "open"]
@@ -336,12 +354,17 @@ def pnl_text(trades: list[Trade], label: str) -> str:
         if not rows:
             return []
         total = sum(t.pnl_dc or 0 for t in rows)
+        gross = sum(t.gross_pnl_dc or 0 for t in rows)
+        fees = sum((t.entry_fee_dc or 0) + (t.exit_fee_dc or 0) for t in rows)
         wins = len([t for t in rows if (t.pnl_dc or 0) > 0])
         rate = wins / len(rows) * 100
         sign = "+" if total >= 0 else "-"
+        gsign = "+" if gross >= 0 else "-"
         return [
             f"<b>{name}</b>",
             f"Trades {len(rows)} · Wins {wins} ({rate:.0f}%)",
+            f"Gross {gsign}${format_dollars(abs(gross))} · "
+            f"fees ${format_dollars(fees)}",
             f"Net <b>{sign}${format_dollars(abs(total))}</b>",
             "",
         ]

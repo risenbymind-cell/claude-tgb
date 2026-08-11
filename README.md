@@ -13,11 +13,12 @@ start in a paper simulation, and switch to live when you're satisfied.
 
 **The bundled strategies are reference implementations, not a validated edge.**
 
-`kbot/strategy/directional.py` ships two presets — a momentum strategy and a
-mean-reversion strategy — built from ordinary market-microstructure reasoning:
-order-book imbalance, short-horizon drift in fair value, spread and liquidity
-filters. Every threshold is a named constant. None of it has been backtested for
-you, and no claim is made that either preset is profitable.
+`kbot/strategy/directional.py` ships three presets — **Drift** (momentum),
+**Fade** (mean reversion) and **Hammer** (sweep-follow) — built from ordinary
+market-microstructure reasoning: order-book imbalance, short-horizon drift in
+fair value, spread and liquidity filters. Every threshold is a named constant.
+None of it has been backtested for you, and no claim is made that any preset is
+profitable.
 
 If you have a tested edge, this repo is the harness to run it in: implement the
 `Strategy` protocol, register it, and it appears in the bot's strategy picker
@@ -36,7 +37,8 @@ Kalshi trading carries real risk of loss. Nothing here is financial advice.
 | **Market discovery** | Finds the current 15-minute window per coin every 20s by listing open markets in each series — no hard-coded ticker formats. |
 | **Manual mode** | Every signal arrives in Telegram with side, price, confidence and the reasoning behind it. |
 | **Auto mode** | The bot sizes, places, and manages the trade on your account. |
-| **Exits** | A sell order goes in the moment an entry fills — entry + N cents, or an absolute target. Unfilled positions settle with the window. |
+| **Exits** | A sell order goes in the moment an entry fills — entry + N cents, or an absolute target, raised automatically if it would not clear the round-trip fee. Unfilled positions settle with the window. |
+| **Fees** | Kalshi's quadratic trading fee is modelled exactly and charged on both legs. All P/L is booked net, and gross/fees/net are reported separately. |
 | **Risk caps** | Daily loss limit, max open exposure, balance floor, per-window and total position limits. |
 | **Paper mode** | The same code path with a simulated broker, filling against real live prices. Default for every new user. |
 | **Access keys** | Daily / weekly / monthly / lifetime tiers, minted by an admin or bought with crypto in chat. |
@@ -151,12 +153,13 @@ kbot/
   storage.py           sqlite: users, settings, encrypted creds, keys, trade ledger
   kalshi/
     auth.py            RSA-PSS request signing
+    fees.py            Kalshi's quadratic fee model and breakeven maths
     rest.py            REST client (markets, portfolio, orders)
     ws.py              websocket order-book feed + REST fallback, fair-value history
     orderbook.py       book state, imbalance, microprice
   strategy/
     base.py            MarketContext / Signal / Strategy protocol
-    directional.py     the two presets — replace these with your own
+    directional.py     Drift / Fade / Hammer — replace these with your own
   engine/
     discovery.py       finds the live 15-minute market per coin
     broker.py          PaperBroker and LiveBroker, same interface
@@ -188,6 +191,14 @@ Four design decisions worth knowing:
   against the real book: an entry fills only at or above the live ask, capped by
   the size actually resting there.
 
+- **Fees are first-class, not an afterthought.** Kalshi charges
+  `ceil(0.07 x contracts x P x (1-P))` on every fill. Near the middle of the
+  book — where these markets live — that is roughly **4c of round-trip drag**,
+  so a "+3c" target is a guaranteed loss dressed as a win. The bot models the
+  fee exactly (verified against real fills), charges it on entry and exit,
+  books all P/L net, and raises any exit target that would not clear it.
+  Settlement is free, so a position held to expiry pays the entry fee only.
+
 - **Risk caps are enforced against the ledger, not memory.** Daily loss limits
   and exposure caps are recomputed from stored trades on every check, so
   restarting the bot cannot reset a user's limits.
@@ -207,14 +218,18 @@ class MyStrategy:
     description = "What it does, shown in the picker."
 
     def evaluate(self, ctx: MarketContext) -> Signal | None:
-        if ctx.book.imbalance() > 0.5 and ctx.fv_change_20s > 2:
+        # Prices and fair-value changes are deci-cents: 20 == 2 cents.
+        if ctx.book.imbalance() > 0.5 and (ctx.fv_change_20s or 0) > 20:
             return Signal(
                 coin=ctx.coin, ticker=ctx.ticker, side="yes",
-                confidence=0.7, price=ctx.book.best_ask("yes"),
+                confidence=0.7, price_dc=ctx.book.best_ask("yes"),
                 reason="why this fired",
             )
         return None
 ```
+
+Remember the fee floor when choosing a target: `kbot.kalshi.fees.breakeven_cents`
+tells you how far price must move before a round trip is worth taking.
 
 Register it in `kbot/strategy/__init__.py` and it shows up on the dashboard.
 
@@ -227,10 +242,11 @@ pip install pytest pytest-asyncio
 python -m pytest
 ```
 
-145 tests, no network required, covering:
+177 tests, no network required, covering:
 
 - price/unit conversion and the order-book maths
-- both strategies and every filter
+- the fee model, pinned to fee figures read off real fills
+- all three strategies and every filter
 - the V2 order translation — where a sign error would silently invert every
   DOWN trade
 - storage, access keys, the risk gate, the paper broker, market discovery
