@@ -325,3 +325,72 @@ def test_a_recording_can_be_read_while_it_is_still_being_written(tmp_path):
 def test_a_wholly_corrupt_file_does_not_raise(tmp_path):
     (tmp_path / "2026-01-01.jsonl.gz").write_bytes(b"not gzip at all")
     assert list(read_records(tmp_path)) == []
+
+
+# ---------------- statistical power ----------------
+
+
+def test_trades_needed_scales_with_variance():
+    """More noise means more trades before the mean means anything."""
+    from kbot.research.report import trades_needed
+
+    quiet = [10, 12, 8, 11, 9] * 10       # small spread around +1c
+    noisy = [10, -500, 520, 8, -490] * 10  # same-ish mean, huge spread
+
+    n_quiet, _ = trades_needed(quiet)
+    n_noisy, _ = trades_needed(noisy)
+    assert n_quiet < n_noisy
+
+
+def test_trades_needed_is_zero_without_a_sample():
+    from kbot.research.report import trades_needed
+
+    assert trades_needed([]) == (0, 0.0)
+    assert trades_needed([5]) == (0, 0.0)
+
+
+def test_trades_needed_falls_back_when_the_edge_is_nil():
+    """A mean of ~0 would divide by zero; it tests a 1c edge instead."""
+    from kbot.research.report import trades_needed
+
+    n, target = trades_needed([100, -100, 100, -100] * 5)
+    assert target == 10.0
+    assert n > 0
+
+
+def test_a_single_trade_never_claims_significance(tmp_path):
+    """One window cannot settle anything, and the report must not imply it did."""
+    writer = RecordWriter(tmp_path)
+    for r in rising_window(60):
+        writer.write_book(
+            ticker=r.ticker, coin=r.coin, open_time=r.open_time,
+            close_time=r.close_time, yes=r.yes, no=r.no, t=r.t,
+        )
+    writer.write_settle("KXBTC15M-W1", "yes", t=1_000_100.0)
+    writer.close()
+
+    text = render(replay(tmp_path, ReplayConfig(min_confidence=0.3)))
+    assert "plausibly real" not in text
+    assert "Edge per trade" in text
+
+
+def test_many_trades_get_a_sample_size_verdict():
+    """With a real sample, the report says how much more data is needed."""
+    from kbot.research.replay import ReplayResult, ReplayTrade
+
+    result = ReplayResult(config=ReplayConfig(), windows_seen=40)
+    for i in range(40):
+        t = ReplayTrade(
+            coin="BTC", ticker=f"T{i}", side="yes", count=10, entry_dc=500,
+            entry_fee_dc=20, target_dc=580, confidence=0.5, reason="",
+            entered_at=float(i * 900),
+        )
+        # Mostly small wins, occasional full-stake loss: the real shape.
+        t.exit_dc = 580 if i % 5 else 0
+        t.exited_at = float(i * 900 + 400)
+        t.outcome = "target" if i % 5 else "settled"
+        result.trades.append(t)
+
+    text = render(result)
+    assert "Sample size" in text
+    assert "days of recording" in text or "is enough to resolve" in text

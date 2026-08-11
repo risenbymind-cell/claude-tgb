@@ -101,6 +101,18 @@ BCH, TON) do not have an open window at all hours — that is normal.
 
 ## Part 3 — First run
 
+Preflight first. One command checks config, database, ports, Kalshi and
+Telegram, and exits non-zero if anything is broken:
+
+```bash
+.venv/bin/python -m kbot.tools doctor
+```
+
+Exit codes: `0` ready, `1` something is broken, `2` the configuration is
+invalid. A bad value never produces a stack trace — it names the variable and
+what was expected, and the service units carry `RestartPreventExitStatus=2` so
+a typo in `.env` stops the service instead of crash-looping.
+
 ```bash
 .venv/bin/python -m kbot
 ```

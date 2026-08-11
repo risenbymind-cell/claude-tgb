@@ -71,6 +71,32 @@ def summarise(trades: list[ReplayTrade], label: str) -> Stats:
     )
 
 
+def trades_needed(nets: list[int], detect_dc: float | None = None) -> tuple[int, float]:
+    """How many trades before an edge this size is distinguishable from noise.
+
+    Standard power calculation: at 95% confidence and 80% power,
+    n ≈ 7.85 · σ² / μ². Returns (trades_needed, per_trade_edge_being_tested).
+
+    This is the honest answer to "is it profitable?" — the question cannot be
+    settled by watching it for an afternoon. Per-trade P/L on these markets has
+    enormous variance relative to its mean, because most trades clip a few
+    cents and a few give back the whole stake, so it takes a lot of trades
+    before the average means anything.
+    """
+    if len(nets) < 2:
+        return 0, 0.0
+    mean = sum(nets) / len(nets)
+    var = sum((n - mean) ** 2 for n in nets) / (len(nets) - 1)
+    # Default to detecting an edge the size of what has been observed; if that
+    # is ~0, fall back to a practically interesting 1c per contract.
+    target = detect_dc if detect_dc is not None else abs(mean)
+    if target < 1:
+        target = 10.0
+    if var <= 0:
+        return 0, target
+    return int(round(7.85 * var / (target**2))), target
+
+
 def _signed(dc: int) -> str:
     return f"{'+' if dc >= 0 else '-'}${format_dollars(abs(dc))}"
 
@@ -164,6 +190,55 @@ def render(result: ReplayResult) -> str:
                 else "indistinguishable from noise at this sample size"
             )
             lines.append(f" t ≈ {t_stat:+.2f} — {verdict}.")
+    # How much more data would settle it.
+    needed, target = trades_needed(nets)
+    if needed:
+        lines += ["", "─" * 84]
+        if needed <= overall.trades:
+            lines.append(
+                f" Sample size: {overall.trades} trades is enough to resolve an edge"
+                f" of {_signed(int(target))} per trade."
+            )
+        else:
+            short = needed - overall.trades
+            # Rate must come from windows, not wall-clock. The bot takes at
+            # most one trade per market window, and many markets run
+            # concurrently — extrapolating from elapsed time across
+            # simultaneous windows overstates the rate by an order of
+            # magnitude.
+            coins = len({t.coin for t in resolved})
+            per_window = (
+                overall.trades / result.windows_seen if result.windows_seen else 0.0
+            )
+            windows_per_day = 96 * max(1, coins)  # four 15-min windows an hour
+            per_day = per_window * windows_per_day
+            days = short / per_day if per_day > 0 else float("inf")
+            lines += [
+                f" Sample size: NOT ENOUGH. To tell an edge of {_signed(int(target))}"
+                f" per trade",
+                f" from noise you need about {needed} resolved trades — "
+                f"{short} more than you have.",
+            ]
+            if per_day > 0 and days < 3650:
+                lines.append(
+                    f" At {per_window:.2f} trades per window across {coins} coin(s)"
+                    f" — about {per_day:.0f}/day —"
+                )
+                lines.append(
+                    f" that is roughly {days:.1f} more days of recording."
+                )
+                # The number above tests an edge as large as the current noise,
+                # which flatters the timeline. A real edge worth trading is
+                # usually smaller, and costs far more data to establish.
+                modest_dc = 100.0  # 10c per trade
+                n_modest, _ = trades_needed(nets, detect_dc=modest_dc)
+                if n_modest > needed and per_day > 0:
+                    lines.append(
+                        f" To resolve a subtler edge of {_signed(int(modest_dc))}"
+                        f" per trade: ~{n_modest} trades"
+                        f" ({n_modest / per_day:.1f} days)."
+                    )
+
     lines += [
         "",
         " Backtest caveats: no market-impact model, exits require a bid at or",
