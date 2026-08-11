@@ -300,3 +300,28 @@ def test_summarise_handles_no_trades():
 
 def test_money_formatting_is_stable():
     assert format_dollars(17830) == "17.83"
+
+
+def test_a_recording_can_be_read_while_it_is_still_being_written(tmp_path):
+    """Regression: gzip raises at an incomplete final block.
+
+    Analysing data as it accumulates is a normal workflow, and it must return
+    the valid records rather than failing on the whole file.
+    """
+    writer = RecordWriter(tmp_path)
+    for i in range(5):
+        writer.write_book(
+            ticker="T", coin="BTC", open_time=0, close_time=900,
+            yes=[[500, 1.0]], no=[[490, 1.0]], t=100.0 + i,
+        )
+    writer.flush()  # written, but the stream is not closed
+
+    records = list(read_records(tmp_path))
+    assert len(records) >= 1
+    writer.close()
+    assert len(list(read_records(tmp_path))) == 5
+
+
+def test_a_wholly_corrupt_file_does_not_raise(tmp_path):
+    (tmp_path / "2026-01-01.jsonl.gz").write_bytes(b"not gzip at all")
+    assert list(read_records(tmp_path)) == []

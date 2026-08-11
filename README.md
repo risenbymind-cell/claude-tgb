@@ -56,7 +56,8 @@ API key; it never holds, moves, or withdraws money.
 
 ## Setup
 
-**[SETUP.md](SETUP.md) is the full walkthrough** — BotFather to first paper
+**[TUTORIAL.md](TUTORIAL.md) is the complete guide** — install, measure,
+paper, live, sell. **[SETUP.md](SETUP.md) is the shorter deployment walkthrough** — BotFather to first paper
 trade, deployment, and payments. The short version:
 
 ```bash
@@ -183,6 +184,7 @@ kbot/
     provider.py        provider protocol; NOWPayments + manual
     webhook.py         callback listener and /healthz
   research/
+    calibrate.py       is the market priced correctly? where an edge would live
     store.py           gzipped JSON-lines recording format
     recorder.py        live capture, including how each market settled
     replay.py          the backtest simulator
@@ -256,7 +258,7 @@ pip install pytest pytest-asyncio
 python -m pytest
 ```
 
-232 tests, no network required, covering:
+245 tests, no network required, covering:
 
 - price/unit conversion and the order-book maths
 - the fee model, pinned to fee figures read off real fills
@@ -271,6 +273,8 @@ python -m pytest
   settlement, risk blocks, access enforcement
 - record/replay round trips, and the replay arithmetic against hand-computed
   answers
+- calibration, including that it can tell an efficiently priced market from a
+  rigged one
 - rate-limit pacing, and reconciliation against every divergence it can find
 - that the results channel posts losses by default
 
@@ -284,9 +288,37 @@ live order books and replays any strategy over them, scored net of fees:
 ```bash
 python -m kbot.research record --interval 1        # capture (run for days)
 python -m kbot.research days                       # what you have
+python -m kbot.research calibrate                   # is the market priced right?
 python -m kbot.research replay --strategy drift --size 10
 python -m kbot.research sweep --strategy all --targets 5,8,12,20,30
+python -m kbot.research tune --win-rate 92          # what a win-rate target costs
 ```
+
+### Start with `calibrate`
+
+Before testing any strategy, ask whether the market is priced correctly: for
+every market seen trading at price P, what fraction settled YES? If `actual`
+tracks `implied`, there is no free edge in buying a price band and anything you
+earn must come from timing inside the window. A persistent gap is where a real
+edge would live.
+
+It is also the fraud detector. A mean absolute gap above ~15% on real data would
+be extraordinary; on synthetic data it usually means the generator's price and
+its settlement share a source, and a strategy tested on it has learned the
+generator rather than the market.
+
+### Two numbers get called "win rate"
+
+`tune` reports both, because the gap between them is the whole game:
+
+| | |
+|---|---|
+| **hit%** | the trade reached its exit target — what gets screenshotted |
+| **win%** | the trade actually made money after fees — what pays you |
+
+Shrink the profit target and hit% climbs toward 100% while every one of those
+trades loses money, because the round trip costs ~4c of movement near mid-book.
+Optimise **NET**, then report whatever win rate honestly comes with it.
 
 The replay reports trades, win rate, gross, fees, net, average edge per trade
 and max drawdown — overall and per coin — plus a rough t-statistic so a

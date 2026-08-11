@@ -15,11 +15,14 @@ from __future__ import annotations
 
 import gzip
 import json
+import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
+
+log = logging.getLogger(__name__)
 
 
 def day_key(ts: float | None = None) -> str:
@@ -141,17 +144,23 @@ def read_records(
             continue
         if until and day > until:
             continue
-        with gzip.open(path, "rt", encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    yield json.loads(line)
-                except json.JSONDecodeError:
-                    # A truncated final line is normal if recording was killed
-                    # mid-write; skip it rather than losing the whole day.
-                    continue
+        # Reading a file the recorder is still appending to is a normal thing
+        # to want to do, and gzip raises at the incomplete final block rather
+        # than returning what it has. Everything up to that point is valid, so
+        # stop cleanly instead of losing the whole day's recording.
+        try:
+            with gzip.open(path, "rt", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError:
+                        # A half-written final line, same situation.
+                        continue
+        except (EOFError, gzip.BadGzipFile, OSError) as exc:
+            log.debug("Stopped reading %s early: %s", path.name, exc)
 
 
 def available_days(directory: Path) -> list[str]:

@@ -10,6 +10,8 @@ import sys
 from pathlib import Path
 
 from ..config import load_settings
+from .calibrate import calibration
+from .calibrate import render as render_calibration
 from .replay import ReplayConfig, replay
 from .report import render, summarise
 from .store import available_days
@@ -110,6 +112,131 @@ def cmd_sweep(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tune(args: argparse.Namespace) -> int:
+    """Search for a configuration that hits a target win rate — and price it.
+
+    Win rate on its own is the easiest number in trading to manufacture: shrink
+    the profit target and almost every trade closes green, while the rare loser
+    gives back the whole stake at expiry. This searches for the requested win
+    rate and then shows what it actually earns, because the two questions have
+    very different answers.
+    """
+    from ..strategy import REGISTRY
+
+    coins = [c.strip().upper() for c in args.coins.split(",")] if args.coins else None
+    strategies = [args.strategy] if args.strategy != "all" else list(REGISTRY)
+    targets = [int(t) for t in args.targets.split(",")]
+    confidences = [float(c) for c in args.confs.split(",")]
+
+    rows = []
+    for name in strategies:
+        for target in targets:
+            for conf in confidences:
+                cfg = _config_from(args)
+                cfg.strategy = name
+                cfg.profit_cents = target
+                cfg.min_confidence = conf
+                res = replay(
+                    args.dir, cfg, since=args.since, until=args.until, coins=coins
+                )
+                stats = summarise(res.resolved, name)
+                if stats.trades < args.min_trades:
+                    continue
+                rows.append((name, target, conf, stats))
+
+    if not rows:
+        print(f"No configuration produced at least {args.min_trades} trades.")
+        print("Record more data, or lower --min-trades.")
+        return 1
+
+    goal = args.win_rate
+    metric = (lambda st: st.hit_rate) if args.by_hit_rate else (lambda st: st.win_rate)
+    hits = [r for r in rows if metric(r[3]) >= goal]
+
+    # Two different "win rates", and the gap between them is the whole point:
+    #   hit%  — the trade reached its exit target (what a vendor screenshots)
+    #   win%  — the trade actually made money after fees (what pays you)
+    print(f"{'strategy':<9}{'target':>7}{'conf':>7}{'trades':>8}"
+          f"{'hit%':>7}{'win%':>7}{'NET':>11}{'avg/trade':>11}")
+    print("─" * 68)
+
+    def show(row, mark=" "):
+        name, target, conf, st = row
+        print(
+            f"{mark}{name:<8}{f'+{target}c':>7}{conf:>7.2f}{st.trades:>8}"
+            f"{st.hit_rate:>6.1f}%{st.win_rate:>6.1f}%{st.net_dc / 1000:>+11.2f}"
+            f"{st.avg_net_dc / 1000:>+11.3f}"
+        )
+
+    if hits:
+        print(f"\n≥{goal:.0f}% WIN RATE — {len(hits)} configuration(s):\n")
+        for row in sorted(hits, key=lambda r: -metric(r[3]))[:10]:
+            show(row, "★" if row[3].net_dc > 0 else "✗")
+        profitable = [r for r in hits if r[3].net_dc > 0]
+        print(
+            f"\n  of those, {len(profitable)} actually made money."
+            if profitable
+            else "\n  ✗ none of them made money."
+        )
+    else:
+        best = max(rows, key=lambda r: metric(r[3]))
+        label = "target-hit rate" if args.by_hit_rate else "win rate (net > 0)"
+        print(f"\nNothing reached {goal:.0f}% on {label}. Best found:\n")
+        show(best)
+
+    print("\nRanked by NET instead — the number that pays you:\n")
+    for row in sorted(rows, key=lambda r: -r[3].net_dc)[:5]:
+        show(row, "★" if row[3].net_dc > 0 else " ")
+
+    best_net = max(rows, key=lambda r: r[3].net_dc)
+    best_hit = max(rows, key=lambda r: r[3].hit_rate)
+    best_win = max(rows, key=lambda r: r[3].win_rate)
+
+    print(
+        f"\nHighest target-hit rate: {best_hit[3].hit_rate:.1f}% hit, but only "
+        f"{best_hit[3].win_rate:.1f}% made money → net "
+        f"{best_hit[3].net_dc / 1000:+.2f}"
+    )
+    print(
+        f"Highest true win rate:   {best_win[3].win_rate:.1f}% → net "
+        f"{best_win[3].net_dc / 1000:+.2f}"
+    )
+    print(
+        f"Highest NET:             {best_net[3].win_rate:.1f}% win → net "
+        f"{best_net[3].net_dc / 1000:+.2f}"
+    )
+
+    gap = best_hit[3].hit_rate - best_hit[3].win_rate
+    if gap > 10:
+        print(
+            f"\nThat {gap:.0f}-point gap is the fee. {best_hit[3].hit_rate:.0f}% of"
+            "\nthose trades reached their exit target and still lost money,"
+            "\nbecause the target was smaller than the round trip cost."
+            "\nA screenshot of the hit rate would be true and worthless."
+        )
+    if best_win[3].net_dc < best_net[3].net_dc:
+        print(
+            "\nOptimise NET, then report whatever win rate honestly comes with"
+            "\nit. Tuning toward a win-rate number selects for small targets"
+            "\nthat hand the stake back at expiry."
+        )
+    return 0
+
+
+def cmd_calibrate(args: argparse.Namespace) -> int:
+    coins = [c.strip().upper() for c in args.coins.split(",")] if args.coins else None
+    rows = calibration(
+        args.dir,
+        since=args.since,
+        until=args.until,
+        coins=coins,
+        buckets=args.buckets,
+        sample_at_s=args.at,
+    )
+    print(render_calibration(rows))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="python -m kbot.research")
     parser.add_argument("--dir", type=Path, default=DEFAULT_DIR, help="recordings dir")
@@ -147,6 +274,31 @@ def build_parser() -> argparse.ArgumentParser:
     add_replay_args(sw)
     sw.add_argument("--targets", default="5,8,12,20", help="comma separated cents")
     sw.set_defaults(func=cmd_sweep)
+
+    tu = sub.add_parser("tune", help="search for a target win rate, and price it")
+    add_replay_args(tu)
+    tu.add_argument("--win-rate", type=float, default=92.0, help="target win %%")
+    tu.add_argument("--targets", default="1,2,3,5,8,12,20,30")
+    tu.add_argument("--confs", default="0.35,0.45,0.55,0.65")
+    tu.add_argument("--min-trades", type=int, default=20)
+    tu.add_argument(
+        "--by-hit-rate",
+        action="store_true",
+        help="search on target-hit rate rather than trades that actually profited",
+    )
+    tu.set_defaults(func=cmd_tune)
+
+    ca = sub.add_parser(
+        "calibrate", help="does the price predict the outcome? where an edge would live"
+    )
+    ca.add_argument("--coins")
+    ca.add_argument("--since")
+    ca.add_argument("--until")
+    ca.add_argument("--buckets", type=int, default=10)
+    ca.add_argument(
+        "--at", type=float, default=450.0, help="seconds before close to sample"
+    )
+    ca.set_defaults(func=cmd_calibrate)
     return parser
 
 

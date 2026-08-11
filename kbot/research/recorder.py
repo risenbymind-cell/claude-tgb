@@ -122,8 +122,10 @@ class Recorder:
                     no=[[p, q] for p, q in sorted(book.no.items(), reverse=True)],
                     t=now,
                 )
+            # Flush every pass: an in-progress recording should be readable
+            # while it is still being written, not only after it stops.
+            self.writer.flush()
             if now - last_report > 60:
-                self.writer.flush()
                 log.info(
                     "Recorded %d snapshots · %d market(s) live · feed %s",
                     self.writer.written,
