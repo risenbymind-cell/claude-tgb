@@ -1,0 +1,235 @@
+# DirectionalBot
+
+A Telegram bot that watches Kalshi's 15-minute crypto up/down markets (BTC, ETH,
+SOL, XRP, DOGE, BNB, HYPE), reads the live order book, and either sends you a
+signal or places the trade on your own Kalshi account.
+
+Everything runs from one chat: pick your coins, set your size and risk caps,
+start in a paper simulation, and switch to live when you're satisfied.
+
+---
+
+## Read this first
+
+**The bundled strategies are reference implementations, not a validated edge.**
+
+`kbot/strategy/directional.py` ships two presets — a momentum strategy and a
+mean-reversion strategy — built from ordinary market-microstructure reasoning:
+order-book imbalance, short-horizon drift in fair value, spread and liquidity
+filters. Every threshold is a named constant. None of it has been backtested for
+you, and no claim is made that either preset is profitable.
+
+If you have a tested edge, this repo is the harness to run it in: implement the
+`Strategy` protocol, register it, and it appears in the bot's strategy picker
+with no other changes. If you don't, run paper mode and measure before you risk
+money.
+
+Kalshi trading carries real risk of loss. Nothing here is financial advice.
+
+---
+
+## What it does
+
+| | |
+|---|---|
+| **Live order book** | Websocket feed of `orderbook_delta`, one shared book per market, with REST snapshot polling as a fallback. |
+| **Market discovery** | Finds the current 15-minute window per coin every 20s by listing open markets in each series — no hard-coded ticker formats. |
+| **Manual mode** | Every signal arrives in Telegram with side, price, confidence and the reasoning behind it. |
+| **Auto mode** | The bot sizes, places, and manages the trade on your account. |
+| **Exits** | A sell order goes in the moment an entry fills — entry + N cents, or an absolute target. Unfilled positions settle with the window. |
+| **Risk caps** | Daily loss limit, max open exposure, balance floor, per-window and total position limits. |
+| **Paper mode** | The same code path with a simulated broker, filling against real live prices. Default for every new user. |
+| **Access keys** | Admin-minted keys in daily / weekly / monthly / lifetime tiers, redeemed in chat. |
+
+Your funds stay in your own Kalshi account. The bot places orders through your
+API key; it never holds, moves, or withdraws money.
+
+---
+
+## Setup
+
+```bash
+git clone <this repo> && cd claude-tgb
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+Fill in `.env`:
+
+1. **`TELEGRAM_BOT_TOKEN`** — from [@BotFather](https://t.me/BotFather).
+2. **`MASTER_KEY`** — `python -m kbot.tools genkey`. This encrypts users' Kalshi
+   private keys at rest. Back it up; losing it makes every stored credential
+   unreadable.
+3. **`ADMIN_IDS`** — your Telegram user ID, so you can mint access keys.
+4. *(optional)* **`KALSHI_API_KEY_ID`** + **`KALSHI_PRIVATE_KEY_PATH`** — a
+   platform key used **only** for the shared market-data websocket. Without it
+   the bot falls back to REST order-book polling, which works but is slower.
+
+Then:
+
+```bash
+python -m kbot
+```
+
+Or with Docker:
+
+```bash
+docker compose up -d
+```
+
+### Verify Kalshi series tickers
+
+Kalshi renames and adds series over time. Check what the bot can actually see:
+
+```bash
+python -m kbot.tools markets
+```
+
+If a coin is missing, override the mapping in `.env`:
+
+```
+KALSHI_SERIES={"BTC":"KXBTCD","ETH":"KXETHD","SOL":"KXSOLD"}
+```
+
+Set `KALSHI_DEMO=true` to point everything at Kalshi's demo environment while
+you're getting set up.
+
+---
+
+## Using it
+
+**As an operator:**
+
+```
+/genkeys weekly 10     mint 10 weekly access keys
+/keystats              redemption counts per tier
+/grant <tg_id> monthly grant access directly, no key needed
+```
+
+Keys can also be minted without Telegram: `python -m kbot.tools mintkeys weekly 10`.
+
+**As a trader:**
+
+```
+/start                 open the dashboard
+/redeem YOUR-KEY       activate access
+/connect               add your Kalshi API key (guided, key deleted from chat)
+/positions             open positions and recent trades
+/pnl [days]            realised P/L, paper and live split out
+/status                feed health and the live markets right now
+/stop                  stop trading
+```
+
+Everything else is buttons on the dashboard: mode, paper/live, coins, strategy,
+size, entry band, exit rules and risk caps.
+
+### Going live
+
+1. Create an API key at kalshi.com → Account → API Keys. You get a **key ID** and
+   an **RSA private key** file.
+2. Send `/connect` and paste both. The bot verifies the key against Kalshi before
+   saving it, encrypts it, and deletes your message from the chat.
+3. Flip **Live** on the dashboard and press **Start trading**.
+
+You can go back to paper at any time, and `/disconnect` removes your key entirely.
+
+---
+
+## How it's put together
+
+```
+kbot/
+  config.py            environment-driven settings
+  storage.py           sqlite: users, settings, encrypted creds, keys, trade ledger
+  kalshi/
+    auth.py            RSA-PSS request signing
+    rest.py            REST client (markets, portfolio, orders)
+    ws.py              websocket order-book feed + REST fallback, fair-value history
+    orderbook.py       book state, imbalance, microprice
+  strategy/
+    base.py            MarketContext / Signal / Strategy protocol
+    directional.py     the two presets — replace these with your own
+  engine/
+    discovery.py       finds the live 15-minute market per coin
+    broker.py          PaperBroker and LiveBroker, same interface
+    risk.py            the risk gate
+    runner.py          the engine: tick loop, execution, position management
+    spot.py            optional spot reference feed
+  telegram/
+    api.py             minimal Bot API client (long polling)
+    ui.py              dashboard text and inline keyboards
+    bot.py             commands, callbacks, guided credential entry
+```
+
+Three design decisions worth knowing:
+
+- **Strategies are pure.** A strategy sees a `MarketContext` and returns a
+  `Signal` or `None`. It cannot place orders, read the database, or know which
+  user it runs for. That makes it testable in isolation and safe to share across
+  users — the engine evaluates each (strategy, market) pair once per tick and
+  applies each user's own risk settings to the result.
+
+- **Paper mode is not a separate code path.** `PaperBroker` and `LiveBroker`
+  implement the same three calls, so the only difference between a simulation and
+  a real order is which object the engine is holding. Paper fills are modelled
+  against the real book: an entry fills only at or above the live ask, capped by
+  the size actually resting there.
+
+- **Risk caps are enforced against the ledger, not memory.** Daily loss limits
+  and exposure caps are recomputed from stored trades on every check, so
+  restarting the bot cannot reset a user's limits.
+
+### Adding your own strategy
+
+```python
+# kbot/strategy/mine.py
+class MyStrategy:
+    name = "mine"
+    description = "What it does, shown in the picker."
+
+    def evaluate(self, ctx: MarketContext) -> Signal | None:
+        if ctx.book.imbalance() > 0.5 and ctx.fv_change_20s > 2:
+            return Signal(
+                coin=ctx.coin, ticker=ctx.ticker, side="yes",
+                confidence=0.7, price=ctx.book.best_ask("yes"),
+                reason="why this fired",
+            )
+        return None
+```
+
+Register it in `kbot/strategy/__init__.py` and it shows up on the dashboard.
+
+---
+
+## Tests
+
+```bash
+pip install pytest pytest-asyncio
+python -m pytest
+```
+
+94 tests covering the order-book maths, both strategies and their filters,
+storage and access keys, the risk gate, the paper broker, market discovery, the
+dashboard's settings logic, and the full engine loop end to end against injected
+market state — entry, exit, settlement, risk blocks, and access enforcement. No
+network required.
+
+---
+
+## Operational notes
+
+- `data/` holds the sqlite database: users, access keys and the trade ledger.
+  Back it up. Risk caps are enforced from it.
+- Never commit `.env`, `MASTER_KEY`, or any `.pem`. They are gitignored.
+- If a user blocks the bot, their trading is switched off automatically rather
+  than left running unwatched.
+- If a user's stored key stops authenticating, trading stops for that user and
+  they are told why.
+
+## Disclaimer
+
+This is trading-automation software, not financial, investment, or trading
+advice. Signals and automation are provided as-is with no guarantee of profit or
+performance. Backtested or past results do not predict future results. You are
+solely responsible for your own trading decisions, your account, and your funds.
+Only trade money you can afford to lose.

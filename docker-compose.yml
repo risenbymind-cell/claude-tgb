@@ -1,0 +1,9 @@
+services:
+  bot:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ./data:/app/data
+      # Mount the platform market-data key read-only if you use one.
+      - ./secrets:/app/secrets:ro

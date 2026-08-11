@@ -1,0 +1,13 @@
+.env
+data/
+secrets/
+*.pem
+*.sqlite3
+*.sqlite3-journal
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
