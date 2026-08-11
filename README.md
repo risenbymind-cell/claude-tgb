@@ -44,6 +44,10 @@ Kalshi trading carries real risk of loss. Nothing here is financial advice.
 | **Access keys** | Daily / weekly / monthly / lifetime tiers, minted by an admin or bought with crypto in chat. |
 | **Payments** | `/buy` issues a crypto invoice and delivers the key automatically once payment confirms. Manual address + admin confirmation works with no third-party account. |
 | **Website** | `site/index.html` — a self-contained landing page whose pricing buttons deep-link into the bot on the right tier. |
+| **Results channel** | Resolved trades posted publicly with a running tally — **including losses**, because a wins-only feed is not evidence. Members opt in with `/share`; posts are anonymous. |
+| **Research** | Record live books and replay any strategy over them, scored net of fees. |
+| **Reconciliation** | The ledger is checked against Kalshi's real positions at startup and periodically: exits that filled while the bot was down, positions closed by hand, and partial fills are all detected. |
+| **Rate limiting** | Client-side token buckets, metered separately for reads and writes, so a 429 never lands mid-order. |
 
 Your funds stay in your own Kalshi account. The bot places orders through your
 API key; it never holds, moves, or withdraws money.
@@ -126,6 +130,8 @@ Keys can also be minted without Telegram: `python -m kbot.tools mintkeys weekly 
 /connect               add your Kalshi API key (guided, key deleted from chat)
 /positions             open positions and recent trades
 /pnl [days]            realised P/L, paper and live split out
+/stats [days]          breakdown by coin, direction and hour, plus drawdown
+/share on|off          post your closed trades to the results channel
 /status                feed health and the live markets right now
 /stop                  stop trading
 ```
@@ -154,6 +160,7 @@ kbot/
   kalshi/
     auth.py            RSA-PSS request signing
     fees.py            Kalshi's quadratic fee model and breakeven maths
+    throttle.py        read/write token buckets per rate-limit tier
     rest.py            REST client (markets, portfolio, orders)
     ws.py              websocket order-book feed + REST fallback, fair-value history
     orderbook.py       book state, imbalance, microprice
@@ -163,6 +170,7 @@ kbot/
   engine/
     discovery.py       finds the live 15-minute market per coin
     broker.py          PaperBroker and LiveBroker, same interface
+    reconcile.py       ledger vs. Kalshi's actual positions
     risk.py            the risk gate
     runner.py          the engine: tick loop, execution, position management
     spot.py            optional spot reference feed
@@ -170,6 +178,7 @@ kbot/
     api.py             minimal Bot API client (long polling)
     ui.py              dashboard text and inline keyboards
     bot.py             commands, callbacks, guided credential entry
+    channel.py         public results channel (wins and losses)
   payments/
     provider.py        provider protocol; NOWPayments + manual
     webhook.py         callback listener and /healthz
@@ -247,7 +256,7 @@ pip install pytest pytest-asyncio
 python -m pytest
 ```
 
-200 tests, no network required, covering:
+232 tests, no network required, covering:
 
 - price/unit conversion and the order-book maths
 - the fee model, pinned to fee figures read off real fills
@@ -262,6 +271,8 @@ python -m pytest
   settlement, risk blocks, access enforcement
 - record/replay round trips, and the replay arithmetic against hand-computed
   answers
+- rate-limit pacing, and reconciliation against every divergence it can find
+- that the results channel posts losses by default
 
 ---
 
@@ -292,6 +303,17 @@ on resting exits (an exit only fills when a bid actually reaches the target,
 which is the pessimistic assumption). Watch for the trap the harness makes
 obvious — a **high win rate with a negative net**, which is what a small profit
 target plus full-stake losses at expiry produces.
+
+## The results channel
+
+Set `RESULTS_CHAT_ID` and the bot posts every resolved trade to a public
+channel with a running tally attached.
+
+That tally counts losses. `RESULTS_POST_LOSSES` defaults to true and should stay
+that way — a feed of nothing but wins is not evidence, anyone who trades works
+that out quickly, and a verifiable record is a stronger claim than a highlight
+reel. Members opt in for their own trades with `/share on`; posts carry no
+username, account detail or size attribution.
 
 ## Deploying
 

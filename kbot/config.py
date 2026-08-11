@@ -119,6 +119,11 @@ class Settings:
     webhook_path: str = "/webhook/payment"
     bot_username: str | None = None
 
+    # Results channel.
+    results_chat_id: str | None = None
+    results_post_losses: bool = True
+    results_min_net_cents: int = 0
+
     # Engine cadence.
     scan_interval_s: float = 1.0
     discovery_interval_s: float = 20.0
@@ -193,6 +198,9 @@ def load_settings() -> Settings:
         webhook_port=_env_int("WEBHOOK_PORT", 8080),
         webhook_path=os.getenv("WEBHOOK_PATH", "/webhook/payment"),
         bot_username=(os.getenv("BOT_USERNAME") or "").lstrip("@") or None,
+        results_chat_id=os.getenv("RESULTS_CHAT_ID") or None,
+        results_post_losses=_env_bool("RESULTS_POST_LOSSES", True),
+        results_min_net_cents=_env_int("RESULTS_MIN_NET_CENTS", 0),
         md_key_id=os.getenv("KALSHI_API_KEY_ID") or None,
         md_private_key=_read_private_key(),
         scan_interval_s=float(os.getenv("SCAN_INTERVAL_S", "1.0")),

@@ -118,6 +118,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "balance_floor_cents": 1000,
     "max_trades_per_window": 1,
     "max_open_positions": 3,
+    "share_results": False,
 }
 
 
@@ -698,6 +699,70 @@ class Storage:
                 " WHERE status = 'paid' GROUP BY tier"
             ).fetchall()
             return {r["tier"]: (r["n"], r["total"] or 0.0) for r in rows}
+
+        return await self._run(work)
+
+    async def all_closed_trades(
+        self, paper: bool | None = None, since: float = 0.0
+    ) -> list[Trade]:
+        """Every resolved trade across all users — the results-channel tally."""
+
+        def work() -> list[Trade]:
+            sql = "SELECT * FROM trades WHERE status != 'open' AND opened_at >= ?"
+            args: list = [since]
+            if paper is not None:
+                sql += " AND paper = ?"
+                args.append(1 if paper else 0)
+            sql += " ORDER BY closed_at"
+            return [_row_to_trade(r) for r in self._conn.execute(sql, args).fetchall()]
+
+        return await self._run(work)
+
+    async def strategy_breakdown(
+        self, tg_id: int, since: float
+    ) -> list[tuple[str, str, int, int, int]]:
+        """(coin, side, trades, wins, net_dc) per coin for one user."""
+
+        def work():
+            rows = self._conn.execute(
+                "SELECT coin, side, COUNT(*) n,"
+                " SUM(CASE WHEN pnl_dc > 0 THEN 1 ELSE 0 END) wins,"
+                " SUM(pnl_dc) net FROM trades"
+                " WHERE tg_id = ? AND status != 'open' AND opened_at >= ?"
+                " GROUP BY coin, side ORDER BY net DESC",
+                (tg_id, since),
+            ).fetchall()
+            return [
+                (r["coin"], r["side"], r["n"], r["wins"] or 0, r["net"] or 0)
+                for r in rows
+            ]
+
+        return await self._run(work)
+
+    async def hourly_breakdown(self, tg_id: int, since: float) -> dict[int, tuple[int, int]]:
+        """(trades, net_dc) per UTC hour, to expose time-of-day effects."""
+
+        def work():
+            rows = self._conn.execute(
+                "SELECT CAST(strftime('%H', opened_at, 'unixepoch') AS INTEGER) h,"
+                " COUNT(*) n, SUM(pnl_dc) net FROM trades"
+                " WHERE tg_id = ? AND status != 'open' AND opened_at >= ?"
+                " GROUP BY h ORDER BY h",
+                (tg_id, since),
+            ).fetchall()
+            return {r["h"]: (r["n"], r["net"] or 0) for r in rows}
+
+        return await self._run(work)
+
+    async def outcome_counts(self, tg_id: int, since: float) -> dict[str, int]:
+        def work():
+            rows = self._conn.execute(
+                "SELECT status, COUNT(*) n FROM trades"
+                " WHERE tg_id = ? AND status != 'open' AND opened_at >= ?"
+                " GROUP BY status",
+                (tg_id, since),
+            ).fetchall()
+            return {r["status"]: r["n"] for r in rows}
 
         return await self._run(work)
 

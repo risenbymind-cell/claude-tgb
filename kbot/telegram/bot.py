@@ -20,6 +20,7 @@ from ..storage import DEFAULT_SETTINGS, PRICES_USD, TIERS, Storage, User
 from ..strategy import REGISTRY
 from . import ui
 from .api import TelegramClient, TelegramError
+from .channel import ResultsChannel
 
 log = logging.getLogger(__name__)
 
@@ -33,6 +34,7 @@ COMMANDS = [
     ("positions", "Open positions and recent trades"),
     ("pnl", "Profit and loss summary"),
     ("status", "Bot and market status"),
+    ("stats", "Performance breakdown"),
     ("stop", "Stop trading"),
     ("help", "How the bot works"),
 ]
@@ -68,13 +70,23 @@ Daily loss limit, max open exposure, a balance floor the bot won't spend below, 
 Create an API key at kalshi.com under Account → API Keys. You'll get a key ID and an RSA private key file. Send both with /connect. The private key is encrypted before it is stored, and your message is deleted from the chat straight after.
 
 <b>Commands</b>
-/dashboard · /positions · /pnl · /status · /stop · /disconnect
+/dashboard · /positions · /pnl · /stats · /status · /stop · /disconnect
+
+<b>Results channel</b>
+<code>/share on</code> posts your closed trades to the public results channel — anonymously, no username or account detail, and losses are posted alongside wins. Off by default.
 
 <i>Signals are not advice. Losing windows happen. Only trade money you can afford to lose.</i>"""
 
 
 # Which dashboard view each setting belongs to, so tapping a button re-renders
 # the menu the user is standing in.
+def STRATEGY_LABEL_FALLBACK(name: str) -> str:
+    """Display name for a strategy, used by the results channel."""
+    from ..engine.runner import STRATEGY_LABELS
+
+    return STRATEGY_LABELS.get(name, name.title() if name else "—")
+
+
 SETTING_VIEWS = {
     "strategy": "strategy",
     "contracts": "size",
@@ -105,6 +117,15 @@ class Bot:
         self.tg = TelegramClient(settings.telegram_token)
         self.engine = Engine(settings, storage, self.notify)
         self.payments = PaymentService(settings, storage, self.notify)
+        self.results = ResultsChannel(
+            self.tg,
+            storage,
+            settings.results_chat_id,
+            post_losses=settings.results_post_losses,
+            min_net_dc=settings.results_min_net_cents * 10,
+        )
+        # The engine publishes every resolved trade through this hook.
+        self.engine.on_trade_closed = self._on_trade_closed
         self.risk = RiskManager(storage)
         self._pending: dict[int, PendingInput] = {}
 
@@ -192,6 +213,8 @@ class Bot:
             "disconnect": self._cmd_disconnect,
             "positions": self._cmd_positions,
             "pnl": self._cmd_pnl,
+            "stats": self._cmd_stats,
+            "share": self._cmd_share,
             "status": self._cmd_status,
             "stop": self._cmd_stop,
             "genkeys": self._cmd_genkeys,
@@ -365,6 +388,54 @@ class Bot:
         trades = await self.storage.trades_since(user.tg_id, since)
         label = "last 24h" if days == 1 else f"last {days} days"
         await self.tg.send_message(user.tg_id, ui.pnl_text(trades, label))
+
+    async def _on_trade_closed(self, trade, strategy: str) -> None:
+        """Publish a resolved trade if its owner has opted in."""
+        if not self.results.enabled:
+            return
+        user = await self.storage.get_user(trade.tg_id)
+        is_house = trade.tg_id in self.settings.admin_ids
+        if not is_house and not (user and user.get("share_results")):
+            return
+        await self.results.post_trade(trade, strategy)
+
+    async def _cmd_share(self, user: User, args: list[str], message: dict) -> None:
+        """Opt in or out of having your results posted anonymously."""
+        if not self.results.enabled:
+            await self.tg.send_message(
+                user.tg_id, "No results channel is configured on this bot."
+            )
+            return
+        current = bool(user.get("share_results"))
+        if args and args[0].lower() in {"on", "off"}:
+            current = args[0].lower() == "on"
+            await self.storage.update_settings(user.tg_id, {"share_results": current})
+        else:
+            current = not current
+            await self.storage.update_settings(user.tg_id, {"share_results": current})
+        await self.tg.send_message(
+            user.tg_id,
+            (
+                "📡 Your closed trades will be posted to the results channel — "
+                "anonymously, with no username, size or account detail. "
+                "Losses are posted too.\nTurn it off with <code>/share off</code>."
+                if current
+                else "🔕 Your trades will not be posted to the results channel."
+            ),
+        )
+
+    async def _cmd_stats(self, user: User, args: list[str], message: dict) -> None:
+        days = 7
+        if args and args[0].isdigit():
+            days = max(1, min(90, int(args[0])))
+        since = time.time() - days * 86400
+        breakdown = await self.storage.strategy_breakdown(user.tg_id, since)
+        hourly = await self.storage.hourly_breakdown(user.tg_id, since)
+        outcomes = await self.storage.outcome_counts(user.tg_id, since)
+        trades = await self.storage.trades_since(user.tg_id, since)
+        await self.tg.send_message(
+            user.tg_id, ui.stats_text(trades, breakdown, hourly, outcomes, days)
+        )
 
     async def _cmd_status(self, user: User, args: list[str], message: dict) -> None:
         markets = self.engine.discovery.markets

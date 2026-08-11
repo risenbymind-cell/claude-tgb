@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 
 from .auth import Signer
+from .throttle import Throttle
 from .prices import (
     complement,
     count_to_fp,
@@ -56,9 +57,13 @@ class KalshiClient:
         signer: Signer | None = None,
         client: httpx.AsyncClient | None = None,
         timeout: float = 10.0,
+        throttle: Throttle | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.signer = signer
+        # Shared across every caller using this client, so the whole process
+        # stays inside one rate budget rather than each user racing the others.
+        self.throttle = throttle or Throttle()
         self._own_client = client is None
         self._client = client or httpx.AsyncClient(timeout=timeout)
 
@@ -82,6 +87,7 @@ class KalshiClient:
 
         last_exc: Exception | None = None
         for attempt in range(retries + 1):
+            await self.throttle.acquire(method)
             try:
                 resp = await self._client.request(
                     method, url, params=params, json=json_body, headers=headers
@@ -95,6 +101,14 @@ class KalshiClient:
                 if resp.status_code != 429 and resp.status_code < 500:
                     raise KalshiError(resp.status_code, resp.text[:500])
                 last_exc = KalshiError(resp.status_code, resp.text[:500])
+                if resp.status_code == 429:
+                    # Respect the exchange's own backoff hint when it gives one.
+                    retry_after = resp.headers.get("retry-after")
+                    if retry_after:
+                        try:
+                            await asyncio.sleep(min(float(retry_after), 10.0))
+                        except ValueError:
+                            pass
 
             if attempt < retries:
                 await asyncio.sleep(0.5 * (2**attempt))
@@ -247,6 +261,13 @@ class KalshiClient:
             "fee_dc": fee_dc,
             "raw": data,
         }
+
+    async def get_resting_orders(self, ticker: str | None = None) -> list[dict]:
+        params: dict[str, Any] = {"status": "resting", "limit": 200}
+        if ticker:
+            params["ticker"] = ticker
+        data = await self._request("GET", "/portfolio/orders", params=params)
+        return data.get("orders", [])
 
     async def cancel_order(self, order_id: str) -> dict[str, Any]:
         return await self._request("DELETE", f"/portfolio/events/orders/{order_id}")

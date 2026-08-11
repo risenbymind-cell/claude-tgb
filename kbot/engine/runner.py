@@ -29,6 +29,7 @@ from ..storage import Storage, Trade, User
 from ..strategy import MarketContext, Signal, get_strategy
 from .broker import Broker, LiveBroker, PaperBroker
 from .discovery import LiveMarket, MarketDiscovery
+from .reconcile import Reconciler, cancel_orphan_orders
 from .risk import RiskManager, exit_price_for
 from .spot import SpotFeed
 
@@ -73,10 +74,14 @@ class Engine:
         self.discovery = MarketDiscovery(self.public, settings.series)
         self.spot = SpotFeed(settings.spot_products)
         self.risk = RiskManager(storage)
+        self.reconciler = Reconciler(storage)
         self.history = BookHistory()
 
         self._brokers: dict[tuple[int, bool], _UserBroker] = {}
         self._signalled: dict[tuple[int, str], float] = {}
+        #: Optional hook: called with (trade, strategy) after a trade resolves.
+        #: The Telegram layer uses it to publish to the results channel.
+        self.on_trade_closed: Callable[[Trade, str], Awaitable[None]] | None = None
         self._tasks: list[asyncio.Task] = []
         self._started_at = 0.0
 
@@ -90,6 +95,7 @@ class Engine:
             asyncio.create_task(self._discovery_loop(), name="discovery"),
             asyncio.create_task(self._tick_loop(), name="tick"),
             asyncio.create_task(self._position_loop(), name="positions"),
+            asyncio.create_task(self._reconcile_loop(), name="reconcile"),
         ]
 
     async def stop(self) -> None:
@@ -353,6 +359,51 @@ class Engine:
             self._brokers[cache_key] = entry
         return entry.broker
 
+    # ---------------- reconciliation ----------------
+
+    async def _reconcile_loop(self) -> None:
+        """Check the ledger against Kalshi at startup, then periodically.
+
+        Runs first thing because the most likely moment for the two to diverge
+        is a restart — the process may have died between placing an order and
+        recording it.
+        """
+        first = True
+        while True:
+            try:
+                await self.reconcile_all(announce_clean=False)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001
+                log.exception("Reconcile pass failed")
+            # Startup check happens immediately; after that it is a slow safety
+            # net, since the position loop handles the normal cases.
+            await asyncio.sleep(30 if first else 300)
+            first = False
+
+    async def reconcile_all(self, announce_clean: bool = True) -> None:
+        users = await self.storage.active_users(self.settings.require_access_key)
+        live_tickers = {m.ticker for m in self.discovery.markets.values()}
+        for user in users:
+            if user.get("paper") and not await self.storage.open_trades(user.tg_id):
+                continue
+            if not user.has_credentials:
+                continue
+            broker = await self._broker_for(user, paper=False)
+            if not isinstance(broker, LiveBroker):
+                continue
+            report = await self.reconciler.run(user.tg_id, broker.client)
+            if report.checked and (not report.clean or announce_clean):
+                await self.notify(user.tg_id, report.summary())
+            if live_tickers:
+                cancelled = await cancel_orphan_orders(broker.client, live_tickers)
+                if cancelled:
+                    log.info(
+                        "Cancelled %d orphaned order(s) for %s",
+                        len(cancelled),
+                        user.tg_id,
+                    )
+
     # ---------------- position management ----------------
 
     async def _position_loop(self) -> None:
@@ -403,9 +454,19 @@ class Engine:
                 log.debug("Exit order lookup failed for %s: %s", trade.id, exc)
                 order = {}
             status = (order.get("status") or "").lower()
-            remaining = order.get("remaining_count")
+            remaining = _remaining_count(order)
+            if remaining is not None and 0 < remaining < trade.count:
+                # A partial fill. Reconciliation books it against the exchange's
+                # own record rather than guessing here, because the untouched
+                # remainder still needs managing.
+                log.info(
+                    "Exit for trade %s partially filled (%s of %s left)",
+                    trade.id,
+                    remaining,
+                    trade.count,
+                )
             if status in {"executed", "filled"} or (
-                remaining is not None and int(remaining) == 0 and status != "canceled"
+                remaining is not None and remaining == 0 and status != "canceled"
             ):
                 target_dc = trade.target_price_dc or 999
                 await self._close(
@@ -464,6 +525,24 @@ class Engine:
         user = await self.storage.get_user(trade.tg_id)
         strategy = str(user.get("strategy")) if user else ""
         await self.notify(closed.tg_id, _format_exit(closed, reason, strategy))
+        if self.on_trade_closed is not None:
+            try:
+                await self.on_trade_closed(closed, strategy)
+            except Exception:  # noqa: BLE001 - publishing must never break trading
+                log.exception("Trade-closed hook failed")
+
+
+def _remaining_count(order: dict) -> float | None:
+    """Contracts still resting on an order, across the API's field spellings."""
+    for key in ("remaining_count_fp", "remaining_count"):
+        value = order.get(key)
+        if value is None:
+            continue
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 STRATEGY_LABELS = {"drift": "Drift", "fade": "Fade", "hammer": "Hammer"}

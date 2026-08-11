@@ -171,6 +171,38 @@ invented numbers as live quotes.
 
 ---
 
+## 8. Results channel (optional)
+
+Create a public Telegram channel, add the bot as an admin, then set:
+
+```
+RESULTS_CHAT_ID=@YourResultsChannel
+RESULTS_POST_LOSSES=true
+```
+
+Every resolved trade is posted with a running tally. Leave `RESULTS_POST_LOSSES`
+on — the running total is what makes the channel credible, and it is only
+credible if it includes the red ones. Members opt in for their own trades with
+`/share on`; nothing identifying is posted.
+
+Put the channel link into `site/index.html` where `RESULTS_CHANNEL_URL` is.
+
+---
+
+## 9. Measure before you sell
+
+```bash
+python -m kbot.research record --interval 1      # leave running for days
+python -m kbot.research replay --strategy drift --size 10
+python -m kbot.research sweep --strategy all --targets 5,8,12,20,30
+```
+
+Watch for a high win rate with a negative net — small targets plus full-stake
+losses at expiry produce exactly that, and it is the single easiest way to
+mistake a losing system for a winning one.
+
+---
+
 ## Going live with real money
 
 1. Run paper mode for long enough to have an opinion about the strategy, not a

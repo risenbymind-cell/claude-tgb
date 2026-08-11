@@ -463,3 +463,79 @@ def invoice_keyboard(invoice) -> dict:
         rows.append([url_button("💳 Pay now", invoice.checkout_url)])
     rows.append([button("‹ Back to dashboard", "nav:main")])
     return keyboard(*rows)
+
+
+# ---------------- performance breakdown ----------------
+
+
+def stats_text(
+    trades: list[Trade],
+    breakdown: list[tuple[str, str, int, int, int]],
+    hourly: dict[int, tuple[int, int]],
+    outcomes: dict[str, int],
+    days: int,
+) -> str:
+    closed = [t for t in trades if t.status != "open"]
+    if not closed:
+        return (
+            f"<b>Stats — last {days}d</b>\n\n<i>No closed trades yet.</i>\n\n"
+            "Paper mode counts. Let it run through a few windows first."
+        )
+
+    nets = [t.pnl_dc or 0 for t in closed]
+    gross = sum(t.gross_pnl_dc or 0 for t in closed)
+    fees = sum((t.entry_fee_dc or 0) + (t.exit_fee_dc or 0) for t in closed)
+    net = sum(nets)
+    wins = len([n for n in nets if n > 0])
+
+    # Drawdown over the sequence, which a win rate alone will never show you.
+    equity = peak = drawdown = 0
+    for n in nets:
+        equity += n
+        peak = max(peak, equity)
+        drawdown = max(drawdown, peak - equity)
+
+    sign = "+" if net >= 0 else "-"
+    lines = [
+        f"<b>Stats — last {days}d</b>",
+        "",
+        f"Trades <b>{len(closed)}</b> · wins <b>{wins}</b> "
+        f"({wins / len(closed) * 100:.0f}%)",
+        f"Gross {'+' if gross >= 0 else '-'}${format_dollars(abs(gross))} · "
+        f"fees ${format_dollars(fees)}",
+        f"Net <b>{sign}${format_dollars(abs(net))}</b> "
+        f"({sign}${format_dollars(abs(net) // max(1, len(closed)))} per trade)",
+        f"Max drawdown ${format_dollars(drawdown)}",
+    ]
+
+    if outcomes:
+        hit = outcomes.get("closed", 0)
+        expired = outcomes.get("expired", 0)
+        lines += ["", f"Target hit {hit} · held to expiry {expired}"]
+
+    if breakdown:
+        lines += ["", "<b>By coin & direction</b>"]
+        for coin, side, n, wins_c, net_c in breakdown[:10]:
+            arrow = "▲" if side == "yes" else "▼"
+            s = "+" if net_c >= 0 else "-"
+            lines.append(
+                f"{arrow} {coin} — {n} trades, {wins_c / n * 100:.0f}% win, "
+                f"<b>{s}${format_dollars(abs(net_c))}</b>"
+            )
+
+    best = [(h, v) for h, v in hourly.items() if v[0] >= 3]
+    if len(best) >= 3:
+        best.sort(key=lambda kv: kv[1][1], reverse=True)
+        lines += ["", "<b>Best / worst hours (UTC)</b>"]
+        for h, (n, net_h) in best[:2] + best[-2:]:
+            s = "+" if net_h >= 0 else "-"
+            lines.append(
+                f"{h:02d}:00 — {n} trades, <b>{s}${format_dollars(abs(net_h))}</b>"
+            )
+
+    lines += [
+        "",
+        "<i>All figures net of Kalshi trading fees. A high win rate with a "
+        "negative net means small wins and full-stake losses at expiry.</i>",
+    ]
+    return "\n".join(lines)
