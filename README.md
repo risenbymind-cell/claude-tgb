@@ -60,13 +60,27 @@ API key; it never holds, moves, or withdraws money.
 paper, live, sell. **[SETUP.md](SETUP.md) is the shorter deployment walkthrough** — BotFather to first paper
 trade, deployment, and payments. The short version:
 
+**One command on a fresh server:**
+
+```bash
+git clone <this repo> /opt/directionalbot
+sudo /opt/directionalbot/scripts/bootstrap.sh
+```
+
+It installs everything, runs a wizard for the three values only you can supply
+(bot token, your Telegram ID, production or demo), generates the `MASTER_KEY`,
+verifies with the preflight, and starts both services. Safe to re-run.
+
+<details>
+<summary>Or do it by hand</summary>
+
 ```bash
 git clone <this repo> && cd claude-tgb
 pip install -r requirements.txt
-cp .env.example .env
+python -m kbot.tools setup     # writes .env, validating as it goes
 ```
 
-Fill in `.env`:
+Or write `.env` yourself:
 
 1. **`TELEGRAM_BOT_TOKEN`** — from [@BotFather](https://t.me/BotFather).
 2. **`MASTER_KEY`** — `python -m kbot.tools genkey`. This encrypts users' Kalshi
@@ -82,6 +96,8 @@ Then:
 ```bash
 python -m kbot
 ```
+
+</details>
 
 Or with Docker:
 
@@ -258,7 +274,7 @@ pip install pytest pytest-asyncio
 python -m pytest
 ```
 
-264 tests, no network required, covering:
+279 tests, no network required, covering:
 
 - price/unit conversion and the order-book maths
 - the fee model, pinned to fee figures read off real fills
@@ -276,6 +292,8 @@ python -m pytest
 - calibration, including that it can tell an efficiently priced market from a
   rigged one
 - configuration validation, and that a bad value exits 2 without a traceback
+- the setup wizard: that it validates before writing, never clobbers an
+  existing `.env`, and writes it chmod 600
 - rate-limit pacing, and reconciliation against every divergence it can find
 - that the results channel posts losses by default
 

@@ -1,6 +1,41 @@
 # Setup
 
-From nothing to a bot placing paper trades. Roughly 20 minutes.
+From nothing to a bot placing paper trades.
+
+---
+
+## The short way
+
+On a fresh Ubuntu or Debian server:
+
+```bash
+git clone <your repo> /opt/directionalbot
+sudo /opt/directionalbot/scripts/bootstrap.sh
+```
+
+That installs packages, creates a service user, builds the venv, runs the setup
+wizard, verifies with the preflight, and installs and starts both systemd units.
+It is safe to re-run — existing config and data are left alone.
+
+The wizard asks for the only three things it cannot generate:
+
+| | where to get it |
+|---|---|
+| Telegram bot token | [@BotFather](https://t.me/BotFather) → `/newbot` |
+| Your Telegram user ID | [@userinfobot](https://t.me/userinfobot) |
+| Production or demo | your call — paper mode is the default either way |
+
+Everything else — `MASTER_KEY`, directories, permissions, service files, and
+pointing the website at your bot — is done for you. The token is checked against
+Telegram before anything is written.
+
+Already have a machine set up, and just want the config?
+
+```bash
+python -m kbot.tools setup
+```
+
+The rest of this document is the same steps done by hand.
 
 ---
 
