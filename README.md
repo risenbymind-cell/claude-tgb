@@ -350,6 +350,12 @@ username, account detail or size attribution.
 
 ## Deploying
 
+CI runs the full suite on every push, plus three checks that guard the
+deployment contract: every module imports on the runtime dependencies alone, a
+bad config exits `2` rather than crash-looping, and every environment variable
+the code reads is documented in `.env.example`. The second job builds the Docker
+image and confirms it fails cleanly on a bad config.
+
 Run the preflight first — it validates config, checks the database opens with
 your `MASTER_KEY`, confirms Kalshi and Telegram are reachable, and exits
 non-zero if anything is broken:

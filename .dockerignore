@@ -1,0 +1,29 @@
+# The build context is uploaded to the daemon — which on a remote or CI builder
+# means it crosses the network. Secrets must never be in it, even though the
+# Dockerfile does not COPY them into the image.
+.env
+.env.*
+!.env.example
+secrets/
+*.pem
+*.key
+
+# Runtime state belongs on a volume, never baked into an image.
+data/
+*.sqlite3
+*.sqlite3-journal
+
+# Nothing here affects the runtime image.
+.git
+.gitignore
+.github
+.pytest_cache
+.venv
+venv/
+__pycache__/
+*.py[cod]
+tests/
+requirements-dev.txt
+pytest.ini
+*.md
+!README.md

@@ -139,6 +139,10 @@ docker compose up -d
 docker compose logs -f
 ```
 
+`.dockerignore` keeps `.env`, `secrets/`, `*.pem` and `data/` out of the build
+context — they never reach the daemon, which matters when the builder is remote
+or in CI.
+
 ### fly.io
 
 ```bash

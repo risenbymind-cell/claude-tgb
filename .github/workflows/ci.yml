@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # Install the runtime manifest on its own first. If a module has crept
+      # in a dependency that is only in the dev requirements, the import check
+      # below catches it here rather than on the server.
+      - name: Install runtime dependencies
+        run: pip install -r requirements.txt
+
+      - name: Every module imports on runtime deps alone
+        run: |
+          python - <<'PY'
+          import importlib, pkgutil, sys
+          import kbot
+          failed = []
+          for m in pkgutil.walk_packages(kbot.__path__, "kbot."):
+              if m.name.endswith("__main__"):
+                  continue
+              try:
+                  importlib.import_module(m.name)
+              except Exception as exc:
+                  failed.append((m.name, exc))
+          if failed:
+              for name, exc in failed:
+                  print(f"{name}: {exc}", file=sys.stderr)
+              sys.exit(1)
+          print("all modules import cleanly")
+          PY
+
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Tests
+        run: python -m pytest -q
+
+      # A config typo must exit 2 so systemd's RestartPreventExitStatus stops
+      # the service instead of crash-looping it. Guard the contract.
+      - name: A bad config exits 2, not 1
+        run: |
+          set +e
+          TELEGRAM_BOT_TOKEN=x MASTER_KEY=not-a-key python -m kbot
+          code=$?
+          set -e
+          test "$code" -eq 2 || { echo "expected exit 2, got $code"; exit 1; }
+
+      - name: Every environment variable is documented
+        run: |
+          python - <<'PY'
+          import pathlib, re, sys
+          code = "\n".join(p.read_text() for p in pathlib.Path("kbot").rglob("*.py"))
+          used = set(re.findall(r'os\.getenv\(\s*["\']([A-Z][A-Z0-9_]+)["\']', code))
+          used |= set(re.findall(
+              r'_env_(?:bool|int|float|json)\(\s*["\']([A-Z][A-Z0-9_]+)["\']', code))
+          documented = set(re.findall(
+              r'^#?\s*([A-Z][A-Z0-9_]+)=',
+              pathlib.Path(".env.example").read_text(), re.M))
+          missing = sorted(used - documented)
+          if missing:
+              print("undocumented in .env.example:", missing, file=sys.stderr)
+              sys.exit(1)
+          print(f"{len(used)} environment variables, all documented")
+          PY
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build -t directionalbot:ci .
+      - name: The image starts and reports a config error cleanly
+        run: |
+          set +e
+          out=$(docker run --rm -e TELEGRAM_BOT_TOKEN=x -e MASTER_KEY=bad \
+                directionalbot:ci 2>&1)
+          code=$?
+          set -e
+          echo "$out"
+          test "$code" -eq 2 || { echo "expected exit 2, got $code"; exit 1; }
+          echo "$out" | grep -q "config error" || {
+            echo "expected a clean config error, not a traceback"; exit 1; }

@@ -25,4 +25,10 @@ RUN useradd --create-home --uid 10001 kbot \
  && mkdir -p /app/data && chown -R kbot:kbot /app
 USER kbot
 
+# Baked into the image so `docker run` and orchestrators get it too, not just
+# compose. Only meaningful when the webhook listener is enabled.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+  CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/healthz')" \
+      || exit 1
+
 CMD ["python", "-m", "kbot"]
