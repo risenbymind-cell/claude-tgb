@@ -189,3 +189,72 @@ def test_an_unreadable_kill_file_is_treated_as_engaged(kill, monkeypatch):
 
     monkeypatch.setattr(type(kill.path), "read_text", boom)
     assert kill.engaged
+
+
+# ---------------- clock drift ----------------
+
+
+class _Resp:
+    def __init__(self, date: str | None):
+        self.headers = {"date": date} if date else {}
+
+
+class _Client:
+    def __init__(self, resp=None, exc=None):
+        self._resp, self._exc = resp, exc
+
+    async def get(self, url):
+        if self._exc:
+            raise self._exc
+        return self._resp
+
+    async def aclose(self):
+        pass
+
+
+def _http_date(offset_s: float) -> str:
+    import email.utils
+    import time
+
+    return email.utils.formatdate(time.time() + offset_s, usegmt=True)
+
+
+async def test_a_synchronised_clock_passes():
+    from kbot.safety import measure_clock_drift
+
+    check = await measure_clock_drift("http://x", client=_Client(_Resp(_http_date(0))))
+    assert check.ok
+    assert check.drift_s is not None and abs(check.drift_s) < 2
+
+
+async def test_a_drifted_clock_is_caught():
+    """Signatures carry a timestamp, so drift fails as an authentication error
+    mid-session -- which reads like a bad key, and sends you looking in the
+    wrong place entirely."""
+    from kbot.safety import measure_clock_drift
+
+    # Server 60s behind us.
+    check = await measure_clock_drift(
+        "http://x", client=_Client(_Resp(_http_date(-60)))
+    )
+    assert not check.ok
+    assert check.drift_s is not None and check.drift_s > 50
+
+
+async def test_an_unreachable_host_is_not_reported_as_drift():
+    """Absence of evidence is not drift; saying so would send someone to
+    change a clock that was fine."""
+    from kbot.safety import measure_clock_drift
+
+    check = await measure_clock_drift("http://x", client=_Client(exc=OSError("down")))
+    assert check.ok
+    assert check.drift_s is None
+
+
+async def test_a_missing_or_unparseable_date_header_is_not_drift():
+    from kbot.safety import measure_clock_drift
+
+    assert (await measure_clock_drift("http://x", client=_Client(_Resp(None)))).ok
+    assert (
+        await measure_clock_drift("http://x", client=_Client(_Resp("not a date")))
+    ).ok

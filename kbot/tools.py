@@ -121,6 +121,7 @@ def cmd_doctor() -> int:
     import socket
 
     from .config import ConfigError, load_settings
+    from .safety import KillSwitch, measure_clock_drift
 
     problems: list[str] = []
     warnings: list[str] = []
@@ -143,7 +144,45 @@ def cmd_doctor() -> int:
         print(f"  \033[31m✗\033[0m {exc}")
         print("\nFix the configuration and run again.\n")
         return 2
-    ok(f"config valid · {'DEMO' if settings.demo else 'PRODUCTION'} environment")
+    ok("config valid")
+    ok(f"mode · {settings.mode.label}")
+
+    # The host and the mode are derived from the same value now, so they
+    # cannot disagree -- but assert it rather than assume it, because this is
+    # the check that would have caught the old two-switch arrangement.
+    expected_demo_host = ".demo.kalshi.co" in settings.rest_base
+    if expected_demo_host != settings.mode.uses_demo_host:
+        bad(
+            f"mode {settings.mode.value} does not match host {settings.rest_base} "
+            "- refusing to start"
+        )
+    elif settings.mode.risks_real_money:
+        warn("PRODUCTION-LIVE: orders will spend real money")
+
+    # A key minted on one environment does not authenticate against the other,
+    # and the failure arrives as a signature rejection mid-session rather than
+    # at startup, so name it here instead.
+    if settings.has_market_data_creds and settings.mode.uses_demo_host:
+        warn(
+            "platform key is used against the DEMO host - a production key "
+            "will be rejected there"
+        )
+
+    drift = asyncio.run(measure_clock_drift(settings.rest_base + "/exchange/status"))
+    if drift.drift_s is None:
+        warn(f"clock not verified - {drift.detail}")
+    elif drift.ok:
+        ok(f"clock in sync - {drift.detail}")
+    else:
+        bad(f"CLOCK DRIFT - {drift.detail}; request signatures will be rejected")
+
+    kill = KillSwitch(path=settings.kill_file)
+    kill_state = kill.state()
+    if kill_state.engaged:
+        warn(f"kill switch {kill_state.describe()} - no orders will be placed")
+    else:
+        ok("kill switch clear")
+
     ok(f"{len(settings.series)} coin(s) configured")
     if not settings.admin_ids:
         warn("ADMIN_IDS is empty — nobody can mint keys or confirm payments")

@@ -256,3 +256,73 @@ class KillSwitch:
             except OSError as exc:
                 log.error("Could not remove kill file %s: %s", self.path, exc)
         log.warning("Kill switch released")
+
+
+# ---------------- clock ----------------
+
+#: Kalshi signs each request with a millisecond timestamp and rejects one that
+#: is too far from its own clock. Well inside that, but far enough out that
+#: latency measurements would already be meaningless.
+MAX_CLOCK_DRIFT_S = 5.0
+
+
+@dataclass(frozen=True)
+class ClockCheck:
+    drift_s: float | None
+    source: str
+    ok: bool
+    detail: str
+
+
+async def measure_clock_drift(url: str, *, client=None) -> ClockCheck:
+    """Compare the local clock against an exchange response's Date header.
+
+    Worth checking at startup rather than discovering later: request
+    signatures carry a timestamp, so a skewed clock does not fail visibly at
+    boot -- it fails as an authentication error in the middle of a session,
+    which reads like a bad key. Every latency number the system reports is
+    also nonsense while the clock is wrong.
+
+    Round-trip time is halved and subtracted, so a slow link is not mistaken
+    for drift.
+    """
+    import email.utils
+    import time as _time
+
+    import httpx
+
+    owns = client is None
+    client = client or httpx.AsyncClient(timeout=10.0)
+    try:
+        sent = _time.time()
+        resp = await client.get(url)
+        received = _time.time()
+    except Exception as exc:  # noqa: BLE001 - unreachable is not "drifted"
+        return ClockCheck(None, "unreachable", True, f"could not reach {url}: {exc}")
+    finally:
+        if owns:
+            await client.aclose()
+
+    header = resp.headers.get("date")
+    if not header:
+        return ClockCheck(None, "absent", True, "server sent no Date header")
+
+    try:
+        server = email.utils.parsedate_to_datetime(header).timestamp()
+    except (TypeError, ValueError):
+        return ClockCheck(None, "unparseable", True, f"bad Date header: {header!r}")
+
+    # The header is whole seconds, so sub-second precision is not available
+    # and is not claimed.
+    local = (sent + received) / 2
+    drift = local - server
+    within = abs(drift) <= MAX_CLOCK_DRIFT_S
+    return ClockCheck(
+        drift_s=drift,
+        source="http-date",
+        ok=within,
+        detail=(
+            f"local clock is {drift:+.1f}s from the exchange"
+            + ("" if within else f" (limit {MAX_CLOCK_DRIFT_S:.0f}s)")
+        ),
+    )
