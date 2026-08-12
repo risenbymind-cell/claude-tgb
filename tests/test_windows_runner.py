@@ -66,6 +66,19 @@ def test_demo_is_written_to_the_env_file_not_just_exported():
     assert 'Set-EnvValue "KALSHI_DEMO" "false"' in text
 
 
+def test_an_incomplete_env_file_is_repaired_rather_than_skipped():
+    """A .env copied from .env.example exists but has no token in it. Keying
+    the wizard off existence alone left those users stuck on a config error
+    with nothing telling them how to get out of it."""
+    text = Path("scripts/run-windows.ps1").read_text(encoding="ascii")
+    assert 'Get-EnvValue "TELEGRAM_BOT_TOKEN"' in text
+    assert "kbot.tools genkey" in text, "a blank MASTER_KEY must be generated"
+    assert 'if (-not (Get-EnvValue "MASTER_KEY"))' in text, (
+        "MASTER_KEY must only be written when absent -- overwriting one strands "
+        "every credential already encrypted under it"
+    )
+
+
 def test_python_runs_in_utf8_mode():
     """The preflight prints check marks; a legacy codepage cannot encode them."""
     text = Path("scripts/run-windows.ps1").read_text(encoding="ascii")

@@ -97,25 +97,25 @@ if ($LASTEXITCODE -ne 0) { Fail "Dependency install failed" }
 
 # --- config -----------------------------------------------------------------
 
-if (-not (Test-Path (Join-Path $root ".env"))) {
-    Write-Host ""
-    Write-Host "First run -- let's write the configuration." -ForegroundColor Cyan
-    Write-Host "You need two things: your bot token from @BotFather, and your"
-    Write-Host "Telegram user ID from @userinfobot. Everything else is generated."
-    Write-Host ""
-    & $venvPython -m kbot.tools setup
-    if ($LASTEXITCODE -ne 0) { Fail "Setup did not complete. Nothing was written." }
-}
+$envPath = Join-Path $root ".env"
 
-# --- environment ------------------------------------------------------------
+function Get-EnvValue($name) {
+    if (-not (Test-Path $envPath)) { return $null }
+    foreach ($line in Get-Content $envPath) {
+        if ($line -match "^\s*$([regex]::Escape($name))\s*=\s*(.*?)\s*$") {
+            return $Matches[1]
+        }
+    }
+    return $null
+}
 
 # -Demo and -Live rewrite one line of .env rather than setting a process
 # variable, so the choice survives a restart of this script and shows up in
 # `doctor` and `/status` -- there is no way to be running against production
 # while believing you are on demo.
 function Set-EnvValue($name, $value) {
-    $path = Join-Path $root ".env"
-    $lines = @(Get-Content $path)
+    $lines = @()
+    if (Test-Path $envPath) { $lines = @(Get-Content $envPath) }
     $pattern = "^\s*#?\s*$([regex]::Escape($name))\s*="
     if ($lines -match $pattern) {
         $lines = $lines | ForEach-Object {
@@ -124,15 +124,49 @@ function Set-EnvValue($name, $value) {
     } else {
         $lines += "$name=$value"
     }
-    Set-Content -Path $path -Value $lines -Encoding UTF8
+    Set-Content -Path $envPath -Value $lines -Encoding UTF8
 }
+
+# A .env can exist and still be unusable -- copied from .env.example, or left
+# behind by a wizard that was interrupted. Existence is therefore not the test;
+# having a token is, because that is the one value nothing here can invent.
+$token = Get-EnvValue "TELEGRAM_BOT_TOKEN"
+$haveToken = $token -and $token -notmatch "your-bot-token"
+
+if (-not $haveToken) {
+    Write-Host ""
+    if (Test-Path $envPath) {
+        Write-Host "The .env here has no bot token yet -- let's finish it." -ForegroundColor Cyan
+    } else {
+        Write-Host "First run -- let's write the configuration." -ForegroundColor Cyan
+    }
+    Write-Host "You need two things: your bot token from @BotFather, and your"
+    Write-Host "Telegram user ID from @userinfobot. Everything else is generated."
+    Write-Host ""
+    & $venvPython -m kbot.tools setup
+    if ($LASTEXITCODE -ne 0) { Fail "Setup did not complete. Nothing was written." }
+}
+
+# MASTER_KEY is generated, never typed, so an empty one is a gap to fill rather
+# than a question to ask. Only ever written when absent: overwriting it would
+# strand every Kalshi credential already encrypted under the old one.
+if (-not (Get-EnvValue "MASTER_KEY")) {
+    $generated = (& $venvPython -m kbot.tools genkey).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $generated) { Fail "Could not generate a MASTER_KEY." }
+    Set-EnvValue "MASTER_KEY" $generated
+    Write-Host ""
+    Write-Host "Generated a MASTER_KEY and wrote it to .env." -ForegroundColor Cyan
+    Write-Host "Back that file up. It is the only thing that can decrypt stored" -ForegroundColor Yellow
+    Write-Host "Kalshi credentials, and nobody can recover it for you." -ForegroundColor Yellow
+}
+
+# --- environment ------------------------------------------------------------
 
 if ($Demo -and $Live) { Fail "Pick one: -Demo or -Live." }
 if ($Demo) { Set-EnvValue "KALSHI_DEMO" "true" }
 if ($Live) { Set-EnvValue "KALSHI_DEMO" "false" }
 
-$onDemo = (Select-String -Path (Join-Path $root ".env") `
-    -Pattern "^\s*KALSHI_DEMO\s*=\s*(true|1|yes|on)\s*$" -Quiet)
+$onDemo = (Get-EnvValue "KALSHI_DEMO") -match "^(true|1|yes|on)$"
 
 # --- preflight --------------------------------------------------------------
 
