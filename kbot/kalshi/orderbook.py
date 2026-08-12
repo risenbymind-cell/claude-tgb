@@ -27,19 +27,46 @@ class OrderBook:
     no: dict[int, float] = field(default_factory=dict)
     seq: int | None = None
     updated_at: float = 0.0
+    #: Set when a delta arrives out of order. A book that has missed a frame is
+    #: wrong in a way it cannot detect from its own contents -- the levels look
+    #: perfectly plausible -- so the flag is the only thing standing between a
+    #: dropped frame and an order priced off a book that silently diverged from
+    #: the exchange's. Cleared only by a fresh snapshot.
+    desynced: bool = False
 
     # ---------------- mutation ----------------
 
     def apply_snapshot(self, yes: object, no: object, seq: int | None = None) -> None:
-        """Replace the book from a snapshot frame (raw wire ladders)."""
+        """Replace the book from a snapshot frame (raw wire ladders).
+
+        A snapshot is ground truth, so it also clears a desync.
+        """
         self.yes = dict(parse_levels(yes))
         self.no = dict(parse_levels(no))
         self.seq = seq
+        self.desynced = False
         self.updated_at = time.time()
 
     def apply_delta(
         self, side: str, price_dc: int, delta: float, seq: int | None = None
-    ) -> None:
+    ) -> bool:
+        """Apply one incremental change. Returns False if a frame was missed.
+
+        Deltas are only meaningful in order. When the sequence jumps, the
+        missing frame cannot be reconstructed from anything we hold, so the
+        book is marked desynced and the delta is dropped: applying it would
+        produce a plausible-looking book that is quietly wrong, which is worse
+        than an obviously stale one. The caller is expected to re-snapshot.
+        """
+        if seq is not None and self.seq is not None:
+            if seq <= self.seq:
+                # A duplicate or replayed frame. Ignore it, but this is not a
+                # desync -- nothing was lost.
+                return True
+            if seq != self.seq + 1:
+                self.desynced = True
+                return False
+
         book = self.yes if side == "yes" else self.no
         price_dc = int(price_dc)
         new_qty = book.get(price_dc, 0.0) + float(delta)
@@ -51,6 +78,7 @@ class OrderBook:
             book.pop(price_dc, None)
         self.seq = seq
         self.updated_at = time.time()
+        return True
 
     # ---------------- reads ----------------
 
@@ -147,7 +175,12 @@ class OrderBook:
 
     @property
     def is_stale(self) -> bool:
-        return self.updated_at == 0.0
+        """True when this book must not be used to price an order.
+
+        A desynced book counts as stale. It has contents, and they look
+        entirely reasonable, which is precisely why it needs saying.
+        """
+        return self.updated_at == 0.0 or self.desynced
 
     def age(self) -> float:
         return float("inf") if self.is_stale else time.time() - self.updated_at

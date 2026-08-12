@@ -48,6 +48,9 @@ class MarketFeed:
         self._cmd_id = 0
         self._sub_id: int | None = None
         self._connected = False
+        #: Tickers whose books lost a frame and need a fresh snapshot before
+        #: they can be trusted again.
+        self._resnapshot: set[str] = set()
 
     # ---------------- lifecycle ----------------
 
@@ -126,14 +129,18 @@ class MarketFeed:
             log.info("Market feed connected")
             self._dirty.set()
             resubscribe = asyncio.create_task(self._resubscribe_loop(ws))
+            repair = asyncio.create_task(self._repair_loop())
             try:
                 async for raw in ws:
                     self._handle_message(raw)
             finally:
                 self._connected = False
                 resubscribe.cancel()
+                repair.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await resubscribe
+                with contextlib.suppress(asyncio.CancelledError):
+                    await repair
 
     async def _resubscribe_loop(self, ws) -> None:
         """Push the current watch list to the socket whenever it changes."""
@@ -206,7 +213,20 @@ class MarketFeed:
             except PriceError:
                 log.debug("Unparseable delta frame for %s", ticker)
                 return
-            book.apply_delta(body.get("side", "yes"), price_dc, delta, msg.get("seq"))
+            ok = book.apply_delta(
+                body.get("side", "yes"), price_dc, delta, msg.get("seq")
+            )
+            if not ok:
+                # A missed frame cannot be reconstructed, so the only recovery
+                # is a fresh snapshot. Until one arrives the book reports
+                # itself stale and nothing will price an order off it.
+                log.warning(
+                    "Sequence gap on %s (had %s, got %s) - re-snapshotting",
+                    ticker,
+                    book.seq,
+                    msg.get("seq"),
+                )
+                self._resnapshot.add(ticker)
 
     # ---------------- REST fallback ----------------
 
@@ -214,6 +234,24 @@ class MarketFeed:
         while True:
             await self._poll_once_all()
             await asyncio.sleep(self.poll_interval)
+
+    async def _repair_loop(self) -> None:
+        """Fetch fresh snapshots for books that lost a frame.
+
+        Runs alongside the websocket rather than inside the message handler:
+        a REST round trip in the read path would stall every other market's
+        deltas behind one book's recovery.
+        """
+        while True:
+            if self._resnapshot:
+                for ticker in sorted(self._resnapshot):
+                    self._resnapshot.discard(ticker)
+                    try:
+                        await self._poll_one(ticker)
+                    except Exception as exc:  # noqa: BLE001 - retry next pass
+                        log.warning("Re-snapshot of %s failed: %s", ticker, exc)
+                        self._resnapshot.add(ticker)
+            await asyncio.sleep(0.5)
 
     async def _poll_once_all(self) -> None:
         tickers = sorted(self._tickers)
