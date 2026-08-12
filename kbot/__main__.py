@@ -8,6 +8,7 @@ import signal
 import sys
 
 from .config import ConfigError, load_settings
+from .redact import install as install_redaction
 from .storage import Storage
 from .telegram.bot import Bot
 
@@ -20,6 +21,11 @@ def configure_logging() -> None:
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("websockets").setLevel(logging.WARNING)
+
+    # Attached before anything can log. httpx at INFO writes the request URL,
+    # and the Telegram token lives inside that URL -- so the leak that matters
+    # most is one no line in this project writes.
+    install_redaction()
 
 
 #: Exit code for a configuration problem. systemd is told not to restart on
@@ -76,6 +82,17 @@ def main() -> int:
     except RuntimeError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return EXIT_CONFIG
+
+    # Now that the real values are known, register them for exact-match
+    # redaction. The pattern rules above already covered their shapes; this
+    # catches anything that does not match a pattern.
+    install_redaction(
+        secrets={
+            "TELEGRAM_TOKEN": settings.telegram_token,
+            "MASTER_KEY": settings.master_key,
+            "KALSHI_PRIVATE_KEY": settings.md_private_key,
+        }
+    )
 
     log = logging.getLogger("kbot")
     log.info(
