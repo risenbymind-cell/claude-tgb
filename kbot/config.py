@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -243,16 +244,30 @@ def resolve_master_key(raw: str) -> str:
     return base64.urlsafe_b64encode(digest).decode()
 
 
-def load_settings() -> Settings:
+def load_settings(*, require_bot: bool = True) -> Settings:
+    """Load configuration.
+
+    `require_bot=False` is for the research tools. Order books on Kalshi are
+    public, so recording and replaying them needs no Telegram bot and no
+    encryption key -- there is nothing to talk to and nothing to encrypt.
+    Demanding both meant data collection could not start until someone had
+    finished setting up a bot, which is backwards: the recording is what tells
+    you whether the bot is worth running at all, and a day not recorded is
+    gone for good.
+    """
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    if not token:
+    if not token and require_bot:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
 
     master_key = os.getenv("MASTER_KEY", "").strip()
     if not master_key:
-        raise RuntimeError(
-            "MASTER_KEY is required (generate one with: python -m kbot.tools genkey)"
-        )
+        if require_bot:
+            raise RuntimeError(
+                "MASTER_KEY is required (generate one with: python -m kbot.tools genkey)"
+            )
+        # Never persisted and never used to encrypt anything -- the research
+        # tools open no credential store.
+        master_key = Fernet.generate_key().decode()
 
     master_key = resolve_master_key(master_key)
 

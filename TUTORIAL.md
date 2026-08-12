@@ -140,6 +140,51 @@ Nothing reaches Kalshi until you explicitly connect a key and switch to Live.
 
 ## Part 4 — Measuring honestly
 
+### Run `signals` before you run anything else
+
+```bash
+python -m kbot.research signals --horizons 15,30,60,120
+```
+
+A backtest asks "did this rule make money over these windows" — a few dozen
+observations, mostly noise. `signals` asks the question underneath it: **does
+any quantity in the order book carry information about the next price move?**
+That is one observation per snapshot rather than per trade, so it reaches an
+answer in days instead of months.
+
+It scores each candidate predictor — book imbalance, microprice deviation,
+drift over 5/20/60s, spread, price level, time elapsed — as an information
+coefficient: the correlation between the feature now and the price change
+later.
+
+| \|IC\| | means |
+|---|---|
+| < 0.01 | nothing. Do not build on it. |
+| 0.01–0.03 | weak but real, if the t-statistic supports it |
+| 0.03–0.06 | good |
+| > 0.10 | suspect your labels before you believe it |
+
+Two things it does that make the numbers trustworthy:
+
+**Overlapping horizons are discounted.** Snapshots one second apart share
+almost all of their forward window, so they are not independent. The reported
+`n_eff` divides the raw count by the overlap, and every t-statistic uses it.
+Skipping this inflates significance by roughly the square root of the overlap
+— the single easiest way to convince yourself of an edge that is not there.
+
+**Windows, not snapshots, are the sample size.** Every coin trading in the same
+quarter hour is moving with the same crypto tape. Nine markets over one window
+is closer to one observation than nine, so below 200 distinct windows the tool
+reports `NOT ENOUGH DATA` and withholds every verdict, however large the
+t-statistic looks.
+
+If nothing clears |t| = 2 on a real sample, no strategy built on these features
+can work, and no amount of tuning targets or confidence thresholds will change
+that — fees and exits can only destroy information, never create it. That is a
+genuinely useful answer, and it costs you two weeks of recording rather than a
+funded account.
+
+
 This is the part that matters. The bundled strategies are documented reasoning,
 not a proven edge. Here is how to find out what you actually have.
 

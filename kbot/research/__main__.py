@@ -19,10 +19,29 @@ from .store import available_days
 DEFAULT_DIR = Path("data/recordings")
 
 
+def cmd_signals(args: argparse.Namespace) -> int:
+    """Score every candidate predictor before any of them becomes a strategy."""
+    from .signals import analyse, format_analysis
+
+    horizons = [float(h) for h in args.horizons.split(",") if h.strip()]
+    coins = [c.strip().upper() for c in args.coins.split(",")] if args.coins else None
+    for horizon in horizons:
+        analysis = analyse(
+            args.dir,
+            horizon=horizon,
+            coins=coins,
+            since=args.since,
+            until=args.until,
+        )
+        print(format_analysis(analysis, buckets=args.buckets))
+        print()
+    return 0
+
+
 def cmd_record(args: argparse.Namespace) -> int:
     from .recorder import Recorder
 
-    settings = load_settings()
+    settings = load_settings(require_bot=False)
     coins = [c.strip().upper() for c in args.coins.split(",")] if args.coins else None
     recorder = Recorder(settings, args.dir, coins=coins, interval=args.interval)
 
@@ -287,6 +306,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="search on target-hit rate rather than trades that actually profited",
     )
     tu.set_defaults(func=cmd_tune)
+
+    sg = sub.add_parser(
+        "signals", help="does any book feature predict the next move? run this first"
+    )
+    sg.add_argument("--coins")
+    sg.add_argument("--since")
+    sg.add_argument("--until")
+    sg.add_argument(
+        "--horizons", default="15,30,60,120", help="forward horizons in seconds"
+    )
+    sg.add_argument("--buckets", type=int, default=5)
+    sg.set_defaults(func=cmd_signals)
 
     ca = sub.add_parser(
         "calibrate", help="does the price predict the outcome? where an edge would live"
