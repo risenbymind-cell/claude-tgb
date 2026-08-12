@@ -42,12 +42,25 @@ it trades while it is on and does nothing while it is off.
 ```powershell
 git clone https://github.com/<you>/claude-tgb.git
 cd claude-tgb
-powershell -ExecutionPolicy Bypass -File scripts\run-windows.ps1
+powershell -ExecutionPolicy Bypass -File scripts\run-windows.ps1 -Demo
 ```
 
 That installs the dependencies, walks you through the two values it cannot
 generate (bot token, your Telegram user ID), runs the preflight, and starts the
-bot. Leave the window open. Re-running it later just starts the bot again.
+bot — then keeps it running. If it crashes or your connection drops it restarts
+itself, backing off up to a minute so an outage doesn't become a spin. The one
+thing it will not restart on is a bad `.env`, because restarting cannot fix a
+typo.
+
+Leave the window open. Re-run the same command any time to start it again.
+
+| Switch | |
+|---|---|
+| `-Demo` | Kalshi's demo environment. Written into `.env`, so it survives restarts and shows up in `doctor` and `/status`. |
+| `-Live` | Switch back to production. |
+| `-Recorder` | Run the market recorder instead of the bot. |
+| `-Once` | Don't restart on exit — useful when you're debugging. |
+| `-SkipChecks` | Start even if the preflight complains. |
 
 Open a second window for the recorder — the thing that makes the profitability
 question answerable — and leave it running:
@@ -58,6 +71,11 @@ powershell -ExecutionPolicy Bypass -File scripts\run-windows.ps1 -Recorder
 
 Then, in Windows settings, turn off sleep on AC power. A laptop that sleeps is a
 bot that stops mid-position.
+
+`-Demo` and paper mode are different things, and you can have both. `-Demo`
+points the *exchange* at Kalshi's demo servers; paper mode (the default) is a
+local simulation that places no orders anywhere. Demo is what you want once you
+have a Kalshi demo API key and want to exercise the real order path.
 
 ### macOS or Linux
 
