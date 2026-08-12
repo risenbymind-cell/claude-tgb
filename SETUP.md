@@ -25,6 +25,56 @@ you or anyone else.
 `fly.recorder.toml` and `deploy/fly.toml` do the same on fly.io if you prefer
 Chicago (`ord`).
 
+> **Render asks for a card even on the free tier.** So does fly.io, and so does
+> Oracle's "always free" tier. It is an identity check — the free instance is
+> not billed — but if you would rather not hand a card over at all, run the bot
+> on a machine you already own. That is the next section.
+
+---
+
+## No card — run it on your own PC
+
+Everything works the same; the only difference is that the machine is yours, so
+it trades while it is on and does nothing while it is off.
+
+### Windows
+
+```powershell
+git clone https://github.com/<you>/claude-tgb.git
+cd claude-tgb
+powershell -ExecutionPolicy Bypass -File scripts\run-windows.ps1
+```
+
+That installs the dependencies, walks you through the two values it cannot
+generate (bot token, your Telegram user ID), runs the preflight, and starts the
+bot. Leave the window open. Re-running it later just starts the bot again.
+
+Open a second window for the recorder — the thing that makes the profitability
+question answerable — and leave it running:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\run-windows.ps1 -Recorder
+```
+
+Then, in Windows settings, turn off sleep on AC power. A laptop that sleeps is a
+bot that stops mid-position.
+
+### macOS or Linux
+
+```bash
+git clone https://github.com/<you>/claude-tgb.git && cd claude-tgb
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+.venv/bin/python -m kbot.tools setup
+.venv/bin/python -m kbot
+```
+
+### What you give up
+
+Your home connection and your desktop are not a trading venue. This is the right
+place to run paper mode and the recorder for the first couple of weeks — which
+is all you should be doing anyway until the data says something. Move to a host
+before you put real money through it.
+
 ---
 
 ## The short way — your own server
