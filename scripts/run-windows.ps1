@@ -228,8 +228,14 @@ $onDemo = $modeValue -eq "demo-live"
 
 if (-not $SkipChecks) {
     Write-Host ""
-    & $venvPython -m kbot.tools doctor
+    # Captured as well as shown, so the failing lines can be repeated at the
+    # moment we start. The preflight output scrolls off the top of the window
+    # the instant the bot begins logging, and a problem you cannot see is a
+    # problem you cannot fix.
+    $doctorOutput = & $venvPython -m kbot.tools doctor 2>&1
     $doctor = $LASTEXITCODE
+    $doctorOutput | ForEach-Object { Write-Host $_ }
+    $doctorProblems = @($doctorOutput | Where-Object { $_ -match "^\s+- " })
 
     # Exit 2 is a bad .env, which no amount of waiting fixes -- stop.
     if ($doctor -eq 2) {
@@ -242,9 +248,14 @@ if (-not $SkipChecks) {
     # is what handles a transient failure. Say so and carry on.
     if ($doctor -ne 0) {
         Write-Host ""
-        Write-Host "Preflight found a problem (see above). Starting anyway -- if it is" -ForegroundColor Yellow
-        Write-Host "the network, this will sort itself out; if not, the restarts below" -ForegroundColor Yellow
-        Write-Host "will show you the same error until you fix it. Ctrl+C to stop." -ForegroundColor Yellow
+        Write-Host "Preflight found a problem:" -ForegroundColor Yellow
+        foreach ($problem in $doctorProblems) {
+            Write-Host "  $($problem.ToString().Trim())" -ForegroundColor Red
+        }
+        Write-Host ""
+        Write-Host "Starting anyway -- if that is the network it will sort itself" -ForegroundColor Yellow
+        Write-Host "out. If it names your Telegram token, it will not: fix .env and" -ForegroundColor Yellow
+        Write-Host "restart. Ctrl+C to stop." -ForegroundColor Yellow
         Start-Sleep -Seconds 5
     }
 }

@@ -277,7 +277,14 @@ def cmd_doctor() -> int:
 
     print()
     if problems:
-        print(f"\033[31m{len(problems)} problem(s) must be fixed before deploying.\033[0m\n")
+        # Restated rather than counted. The checks above scroll off the top of
+        # a terminal the moment the bot starts printing, and "1 problem(s)"
+        # with the problem itself gone is the least useful thing this could
+        # say to someone whose bot is not working.
+        print(f"\033[31m{len(problems)} problem(s) must be fixed before deploying:\033[0m")
+        for problem in problems:
+            print(f"\033[31m  - {problem}\033[0m")
+        print()
         return 1
     if warnings:
         print(f"\033[33mReady to deploy, with {len(warnings)} warning(s).\033[0m\n")

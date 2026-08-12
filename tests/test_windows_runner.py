@@ -115,6 +115,15 @@ def test_env_backups_cannot_be_committed():
     assert "!.env.example" in ignored, ".env.example must stay tracked"
 
 
+def test_the_failing_checks_are_repeated_where_they_can_be_read():
+    """The preflight output scrolls off the top the instant the bot starts
+    logging. "1 problem(s)" with the problem itself gone is the least useful
+    thing this could tell someone whose bot is not working."""
+    text = Path("scripts/run-windows.ps1").read_text(encoding="ascii")
+    assert "$doctorOutput" in text, "preflight output must be captured, not just shown"
+    assert "$doctorProblems" in text, "the failing lines must be repeated at start"
+
+
 def test_python_runs_in_utf8_mode():
     """The preflight prints check marks; a legacy codepage cannot encode them."""
     text = Path("scripts/run-windows.ps1").read_text(encoding="ascii")
