@@ -6,6 +6,10 @@ strategy is real, run it in paper, go live, sell access.
 If you read one section, read [Part 4](#part-4--measuring-honestly). It is the
 one that decides whether the rest is worth doing.
 
+On Windows, and want the mechanics spelled out click by click?
+[WINDOWS.md](WINDOWS.md) is this document's Part 1-3 for a Windows PC, with
+no server involved.
+
 ---
 
 ## Contents

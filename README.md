@@ -57,7 +57,8 @@ API key; it never holds, moves, or withdraws money.
 ## Setup
 
 **[TUTORIAL.md](TUTORIAL.md) is the complete guide** — install, measure,
-paper, live, sell. **[SETUP.md](SETUP.md) is the shorter deployment walkthrough** — BotFather to first paper
+paper, live, sell. **[SETUP.md](SETUP.md) is the shorter deployment walkthrough**, and
+**[WINDOWS.md](WINDOWS.md) is the click-by-click version for a Windows PC** — BotFather to first paper
 trade, deployment, and payments. The short version:
 
 **No server at all** — push this repo to your GitHub, then

@@ -39,6 +39,9 @@ it trades while it is on and does nothing while it is off.
 
 ### Windows
 
+[WINDOWS.md](WINDOWS.md) is the same thing at walkthrough length,
+from installing Python to what to do for the first two weeks.
+
 ```powershell
 git clone https://github.com/<you>/claude-tgb.git
 cd claude-tgb
