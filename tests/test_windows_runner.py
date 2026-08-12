@@ -83,3 +83,34 @@ def test_python_runs_in_utf8_mode():
     """The preflight prints check marks; a legacy codepage cannot encode them."""
     text = Path("scripts/run-windows.ps1").read_text(encoding="ascii")
     assert 'PYTHONUTF8 = "1"' in text
+
+
+def test_a_degraded_preflight_does_not_stop_the_bot_starting():
+    """`doctor` exits 1 when it cannot reach Kalshi, and on a home connection
+    that is usually a blip or a boot that beat the Wi-Fi. Refusing to start
+    would hand a transient failure to the operator; the restart loop is what
+    is supposed to absorb it. Only exit 2 -- a bad .env -- stops us."""
+    text = Path("scripts/run-windows.ps1").read_text(encoding="ascii")
+    gate = text.split("--- preflight")[1].split("--- run")[0]
+    assert "$doctor -eq 2" in gate, "a bad .env must still stop the script"
+    assert "exit 1" not in gate, (
+        "a preflight warning must not prevent the bot from starting"
+    )
+
+
+PS7_ONLY = {
+    "null-coalescing (??)": r"\?\?",
+    "pipeline chain (&&, ||)": r"&&|\|\|",
+    "ternary (? :)": r"\)\s*\?\s+\S+\s+:\s",
+    "utf8NoBOM encoding": r"utf8NoBOM",
+    "ForEach-Object -Parallel": r"ForEach-Object\s+-Parallel",
+}
+
+
+@pytest.mark.parametrize("script", SCRIPTS, ids=lambda p: p.name)
+def test_no_powershell_7_only_syntax(script: Path):
+    """Windows ships 5.1. Every one of these parses on the developer's machine
+    and fails on the user's -- `||` is what broke the first setup attempt."""
+    text = script.read_text(encoding="ascii")
+    found = [name for name, pattern in PS7_ONLY.items() if re.search(pattern, text)]
+    assert not found, f"{script} uses PowerShell 7-only syntax: {found}"

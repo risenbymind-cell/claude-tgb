@@ -174,13 +174,22 @@ if (-not $SkipChecks) {
     Write-Host ""
     & $venvPython -m kbot.tools doctor
     $doctor = $LASTEXITCODE
+
+    # Exit 2 is a bad .env, which no amount of waiting fixes -- stop.
     if ($doctor -eq 2) {
         Fail "The configuration in .env is invalid -- fix the line named above and re-run."
     }
+
+    # Exit 1 is "something is broken", and on a home connection that is most
+    # often the network: a blip, or a boot that got here before Wi-Fi did.
+    # Refusing to start would be the wrong call, because the restart loop below
+    # is what handles a transient failure. Say so and carry on.
     if ($doctor -ne 0) {
         Write-Host ""
-        Write-Host "Preflight found a problem. Fix it, or re-run with -SkipChecks to start anyway." -ForegroundColor Yellow
-        exit 1
+        Write-Host "Preflight found a problem (see above). Starting anyway -- if it is" -ForegroundColor Yellow
+        Write-Host "the network, this will sort itself out; if not, the restarts below" -ForegroundColor Yellow
+        Write-Host "will show you the same error until you fix it. Ctrl+C to stop." -ForegroundColor Yellow
+        Start-Sleep -Seconds 5
     }
 }
 

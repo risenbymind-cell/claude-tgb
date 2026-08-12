@@ -60,7 +60,18 @@ Leave the window open. Re-run the same command any time to start it again.
 | `-Live` | Switch back to production. |
 | `-Recorder` | Run the market recorder instead of the bot. |
 | `-Once` | Don't restart on exit — useful when you're debugging. |
-| `-SkipChecks` | Start even if the preflight complains. |
+| `-SkipChecks` | Skip the preflight entirely. |
+
+A failing preflight does **not** stop the bot starting — on a home connection
+a failure there is usually the network, and the restart loop is what absorbs
+that. The one thing that does stop it is an invalid `.env`, because no amount
+of retrying fixes a typo.
+
+An incomplete `.env` — copied from `.env.example`, or left behind by an
+interrupted wizard — is repaired rather than skipped: the wizard runs again if
+there's no bot token, and a missing `MASTER_KEY` is generated. An existing
+`MASTER_KEY` is never overwritten; that would strand every credential already
+encrypted under it.
 
 Open a second window for the recorder — the thing that makes the profitability
 question answerable — and leave it running:
