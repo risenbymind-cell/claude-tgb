@@ -4,14 +4,14 @@
 #
 # Builds the venv, runs the setup wizard the first time, runs the preflight,
 # then supervises the bot: if it crashes or the network drops, it restarts.
-# Safe to re-run — an existing .env is left alone.
+# Safe to re-run -- an existing .env is left alone.
 #
 #   -Demo       point Kalshi at its demo environment (no real money, ever)
 #   -Live       point Kalshi back at production
 #   -Recorder   run the market recorder instead of the bot
 #   -Once       don't restart on exit; run a single time
 #
-# Run it twice in two windows — once plain, once with -Recorder — if you want
+# Run it twice in two windows -- once plain, once with -Recorder -- if you want
 # data collecting while the bot trades.
 
 param(
@@ -26,6 +26,18 @@ $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
+# Windows PowerShell 5.1 reads a BOM-less script as Windows-1252, so a UTF-8
+# em dash arrives as three characters ending in a curly right quote -- which
+# PowerShell accepts as a string delimiter, closing a string early and taking
+# the rest of the file down with it. This script is therefore kept pure ASCII;
+# tests/test_windows_runner.py enforces that.
+#
+# The Python side has the mirror problem: a legacy console codepage cannot
+# encode the check marks the wizard and preflight print, and that is a crash
+# when output is redirected. UTF-8 mode costs nothing and removes it.
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+
 function Fail($message) {
     Write-Host ""
     Write-Host $message -ForegroundColor Red
@@ -34,7 +46,7 @@ function Fail($message) {
 
 # --- Python -----------------------------------------------------------------
 
-# Each candidate is exe plus its own fixed arguments — `py` needs `-3` to pick
+# Each candidate is exe plus its own fixed arguments -- `py` needs `-3` to pick
 # an interpreter, the others take none. Kept as arrays so nothing has to be
 # re-split later, which is where a stray empty argument would creep in.
 $candidates = @(
@@ -87,7 +99,7 @@ if ($LASTEXITCODE -ne 0) { Fail "Dependency install failed" }
 
 if (-not (Test-Path (Join-Path $root ".env"))) {
     Write-Host ""
-    Write-Host "First run — let's write the configuration." -ForegroundColor Cyan
+    Write-Host "First run -- let's write the configuration." -ForegroundColor Cyan
     Write-Host "You need two things: your bot token from @BotFather, and your"
     Write-Host "Telegram user ID from @userinfobot. Everything else is generated."
     Write-Host ""
@@ -99,7 +111,7 @@ if (-not (Test-Path (Join-Path $root ".env"))) {
 
 # -Demo and -Live rewrite one line of .env rather than setting a process
 # variable, so the choice survives a restart of this script and shows up in
-# `doctor` and `/status` — there is no way to be running against production
+# `doctor` and `/status` -- there is no way to be running against production
 # while believing you are on demo.
 function Set-EnvValue($name, $value) {
     $path = Join-Path $root ".env"
@@ -129,7 +141,7 @@ if (-not $SkipChecks) {
     & $venvPython -m kbot.tools doctor
     $doctor = $LASTEXITCODE
     if ($doctor -eq 2) {
-        Fail "The configuration in .env is invalid — fix the line named above and re-run."
+        Fail "The configuration in .env is invalid -- fix the line named above and re-run."
     }
     if ($doctor -ne 0) {
         Write-Host ""
@@ -153,14 +165,14 @@ if ($Recorder) {
 Write-Host ""
 Write-Host "Starting the $what. Leave this window open." -ForegroundColor Green
 if ($onDemo) {
-    Write-Host "Kalshi: DEMO environment — no real money can move." -ForegroundColor Cyan
+    Write-Host "Kalshi: DEMO environment -- no real money can move." -ForegroundColor Cyan
 } else {
     Write-Host "Kalshi: PRODUCTION environment." -ForegroundColor Yellow
 }
 Write-Host "Stop it with Ctrl+C. $where" -ForegroundColor DarkGray
 Write-Host ""
 
-# Restart on any exit except a config error (2) — restarting cannot fix a typo,
+# Restart on any exit except a config error (2) -- restarting cannot fix a typo,
 # and a loop that hammers Telegram on a bad token gets the token rate-limited.
 # The backoff caps at a minute so a network outage doesn't turn into a spin.
 $delay = 2
@@ -177,7 +189,7 @@ while ($true) {
     if (((Get-Date) - $startedAt).TotalMinutes -ge 5) { $delay = 2 }
 
     if ($code -eq 2) {
-        Fail "Configuration error — fix the line named above and re-run. Not restarting."
+        Fail "Configuration error -- fix the line named above and re-run. Not restarting."
     }
     if ($code -eq 0) {
         Write-Host ""
