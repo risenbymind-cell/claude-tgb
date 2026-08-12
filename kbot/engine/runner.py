@@ -30,7 +30,11 @@ from ..strategy import MarketContext, Signal, get_strategy
 from ..safety import KillSwitch
 from .broker import Broker, IntentRecorder, LiveBroker, PaperBroker
 from .discovery import LiveMarket, MarketDiscovery
-from .reconcile import Reconciler, cancel_orphan_orders
+from .reconcile import (
+    Reconciler,
+    cancel_orphan_orders,
+    resolve_pending_intents,
+)
 from .risk import RiskManager, exit_price_for
 from .spot import SpotFeed
 
@@ -441,6 +445,25 @@ class Engine:
             broker = await self._broker_for(user, paper=False)
             if not isinstance(broker, LiveBroker):
                 continue
+            # Orders we never heard back about are resolved first: an
+            # unrecorded fill is a position, and comparing the ledger against
+            # Kalshi before recovering it would report the position as a
+            # mismatch and try to "fix" the wrong side of it.
+            try:
+                recovered = await resolve_pending_intents(
+                    self.storage, broker.client, user.tg_id
+                )
+            except Exception as exc:  # noqa: BLE001 - never block reconciliation
+                log.warning("Intent recovery failed for %s: %s", user.tg_id, exc)
+                recovered = []
+            if recovered:
+                await self.notify(
+                    user.tg_id,
+                    f"⚠️ Found {len(recovered)} order(s) that reached Kalshi but "
+                    "were never recorded here, probably a restart mid-order. "
+                    "They are in the ledger now — check /positions.",
+                )
+
             report = await self.reconciler.run(user.tg_id, broker.client)
             if report.checked and (not report.clean or announce_clean):
                 await self.notify(user.tg_id, report.summary())

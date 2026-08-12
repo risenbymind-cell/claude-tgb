@@ -231,3 +231,73 @@ async def cancel_orphan_orders(
             continue
         cancelled.append(order_id)
     return cancelled
+
+
+async def resolve_pending_intents(
+    storage,
+    client: KalshiClient,
+    tg_id: int,
+    *,
+    min_age_s: float = 30.0,
+) -> list[str]:
+    """Ask the exchange what happened to orders we never heard back about.
+
+    Runs at startup, before trading resumes. An intent still marked pending
+    means one of two things: the order never left, or it left and the answer
+    was lost. Only the exchange can say which, and it can, because the intent
+    carries the `client_order_id` the order would have been submitted with.
+
+    `min_age_s` keeps this from racing orders that are simply still in flight
+    in another coroutine -- a just-written intent is not evidence of anything.
+
+    Returns the client_order_ids that turned out to be real fills, which the
+    caller should treat as positions it did not know it had.
+    """
+    pending = [
+        row for row in await storage.pending_intents(older_than_s=min_age_s)
+        if row["tg_id"] == tg_id
+    ]
+    if not pending:
+        return []
+
+    log.warning(
+        "%d order intent(s) for %s have no recorded outcome; asking Kalshi",
+        len(pending),
+        tg_id,
+    )
+
+    recovered: list[str] = []
+    for row in pending:
+        coid = row["client_order_id"]
+        try:
+            fills = await client.get_fills(ticker=row["ticker"])
+        except KalshiError as exc:
+            # Leave it pending. An intent we could not check is not an intent
+            # we may assume never happened.
+            log.warning("Could not check intent %s: %s", coid, exc)
+            continue
+
+        matched = [
+            f for f in fills
+            if f.get("client_order_id") == coid or f.get("order_id") == row["order_id"]
+        ]
+        if matched:
+            filled = sum(int(f.get("count", 0)) for f in matched)
+            await storage.resolve_intent(
+                coid,
+                status="filled",
+                order_id=matched[0].get("order_id"),
+                filled=filled,
+                error="recovered at startup",
+            )
+            recovered.append(coid)
+            log.error(
+                "Recovered an unrecorded fill: %s %s x%d on %s",
+                row["action"], row["side"], filled, row["ticker"],
+            )
+        else:
+            # No fill on a market we asked about. The order never took.
+            await storage.resolve_intent(
+                coid, status="rejected", error="no fill found at startup"
+            )
+    return recovered

@@ -403,3 +403,95 @@ async def test_trading_resumes_after_the_kill_switch_is_released(harness):
     harness.engine.kill.release()
     await harness.engine._tick()
     assert len(await harness.storage.open_trades(1)) == 1
+
+
+# ---------------- restart recovery ----------------
+
+
+class _FillsClient:
+    def __init__(self, fills=None, raises=None):
+        self._fills, self._raises = fills or [], raises
+
+    async def get_fills(self, ticker=None, limit=100):
+        if self._raises:
+            raise self._raises
+        return self._fills
+
+
+async def test_a_lost_fill_is_recovered_at_startup(harness):
+    """The whole point of the intent log: an order the exchange accepted and
+    we never recorded must be found before trading resumes."""
+    from kbot.engine.reconcile import resolve_pending_intents
+
+    await harness.storage.record_intent(
+        client_order_id="coid-lost", tg_id=1, ticker="KXBTC-1", action="buy",
+        side="yes", count=3, price_dc=550, mode="production-live",
+    )
+    client = _FillsClient([{"client_order_id": "coid-lost", "order_id": "o5",
+                            "count": 3}])
+
+    recovered = await resolve_pending_intents(
+        harness.storage, client, 1, min_age_s=0.0
+    )
+
+    assert recovered == ["coid-lost"]
+    assert await harness.storage.pending_intents() == []
+
+
+async def test_an_intent_with_no_fill_is_closed_as_rejected(harness):
+    from kbot.engine.reconcile import resolve_pending_intents
+
+    await harness.storage.record_intent(
+        client_order_id="coid-none", tg_id=1, ticker="KXBTC-1", action="buy",
+        side="yes", count=1, price_dc=550, mode="demo-live",
+    )
+    recovered = await resolve_pending_intents(
+        harness.storage, _FillsClient([]), 1, min_age_s=0.0
+    )
+    assert recovered == []
+    assert await harness.storage.pending_intents() == []
+
+
+async def test_an_intent_we_could_not_check_stays_pending(harness):
+    """An intent we failed to verify is not an intent we may assume never
+    happened. It has to survive to the next attempt."""
+    from kbot.engine.reconcile import resolve_pending_intents
+    from kbot.kalshi.rest import KalshiError
+
+    await harness.storage.record_intent(
+        client_order_id="coid-unchecked", tg_id=1, ticker="KXBTC-1", action="buy",
+        side="yes", count=1, price_dc=550, mode="production-live",
+    )
+    await resolve_pending_intents(
+        harness.storage, _FillsClient(raises=KalshiError(503, "down")), 1,
+        min_age_s=0.0,
+    )
+    assert len(await harness.storage.pending_intents()) == 1
+
+
+async def test_an_in_flight_intent_is_not_treated_as_lost(harness):
+    """A just-written intent is not evidence of anything -- another coroutine
+    may still be waiting on the response."""
+    from kbot.engine.reconcile import resolve_pending_intents
+
+    await harness.storage.record_intent(
+        client_order_id="coid-fresh", tg_id=1, ticker="KXBTC-1", action="buy",
+        side="yes", count=1, price_dc=550, mode="production-live",
+    )
+    await resolve_pending_intents(
+        harness.storage, _FillsClient([]), 1, min_age_s=300.0
+    )
+    assert len(await harness.storage.pending_intents()) == 1
+
+
+async def test_recovery_only_touches_the_named_user(harness):
+    from kbot.engine.reconcile import resolve_pending_intents
+
+    await harness.storage.record_intent(
+        client_order_id="coid-other", tg_id=2, ticker="KXBTC-1", action="buy",
+        side="yes", count=1, price_dc=550, mode="production-live",
+    )
+    await resolve_pending_intents(
+        harness.storage, _FillsClient([]), 1, min_age_s=0.0
+    )
+    assert len(await harness.storage.pending_intents()) == 1
