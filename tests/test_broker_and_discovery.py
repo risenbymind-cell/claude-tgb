@@ -164,3 +164,133 @@ async def test_discovery_keeps_the_last_market_when_a_request_fails():
     discovery.rest = Broken()
     markets = await discovery.refresh(["BTC"])
     assert markets["BTC"].ticker == "KXBTC15M-NOW"
+
+
+# ---------------- durable order intent ----------------
+
+
+class _FakeIntents:
+    def __init__(self) -> None:
+        self.recorded: list[dict] = []
+        self.resolved: list[tuple[str, dict]] = []
+
+    async def record(self, **kwargs) -> None:
+        self.recorded.append(kwargs)
+
+    async def resolve(self, client_order_id: str, **kwargs) -> None:
+        self.resolved.append((client_order_id, kwargs))
+
+
+class _FakeClient:
+    def __init__(self, result=None, raises=None) -> None:
+        self.result, self.raises = result, raises
+        self.calls: list[dict] = []
+
+    async def create_order(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.raises:
+            raise self.raises
+        return self.result
+
+
+async def test_intent_is_persisted_before_the_order_is_sent():
+    """The order of these two operations is the entire point. Reversed, a
+    crash in between leaves a live position nobody knows about."""
+    from kbot.engine.broker import LiveBroker
+
+    intents = _FakeIntents()
+    order = {"fill_count": 1, "order_id": "abc", "avg_price_dc": 550, "fee_dc": 10}
+    client = _FakeClient(result=order)
+    broker = LiveBroker(client, intents=intents)
+
+    await broker.buy("KXBTC15M-X", "yes", 1, 550, None)
+
+    assert intents.recorded, "nothing was persisted before submission"
+    coid = intents.recorded[0]["client_order_id"]
+    # The id written to disk must be the id actually sent.
+    assert client.calls[0]["client_order_id"] == coid
+
+
+async def test_a_filled_order_resolves_its_intent():
+    from kbot.engine.broker import LiveBroker
+
+    intents = _FakeIntents()
+    broker = LiveBroker(
+        _FakeClient(result={"fill_count": 2, "order_id": "o1", "avg_price_dc": 500,
+                            "fee_dc": 7}),
+        intents=intents,
+    )
+    result = await broker.buy("T", "yes", 2, 500, None)
+
+    assert result.ok and result.filled == 2
+    _, fields = intents.resolved[0]
+    assert fields["status"] == "filled"
+    assert fields["filled"] == 2
+    assert fields["order_id"] == "o1"
+
+
+async def test_a_4xx_rejection_is_recorded_as_rejected():
+    """The exchange answered and said no, so the case is closed."""
+    from kbot.engine.broker import LiveBroker
+    from kbot.kalshi.rest import KalshiError
+
+    intents = _FakeIntents()
+    broker = LiveBroker(_FakeClient(raises=KalshiError(400, "bad price")),
+                        intents=intents)
+
+    result = await broker.buy("T", "yes", 1, 500, None)
+    assert not result.ok
+    assert intents.resolved[0][1]["status"] == "rejected"
+
+
+async def test_a_transport_failure_is_recorded_as_unknown_not_rejected():
+    """A lost response is not a refusal. Recording it as rejected would close
+    the case on an order that may be live, which is the one outcome this
+    machinery exists to prevent."""
+    import httpx
+
+    from kbot.engine.broker import LiveBroker
+
+    intents = _FakeIntents()
+    broker = LiveBroker(_FakeClient(raises=httpx.ReadTimeout("timed out")),
+                        intents=intents)
+
+    result = await broker.buy("T", "yes", 1, 500, None)
+    assert not result.ok
+    assert intents.resolved[0][1]["status"] == "unknown"
+
+
+async def test_a_5xx_is_also_unknown():
+    from kbot.engine.broker import LiveBroker
+    from kbot.kalshi.rest import KalshiError
+
+    intents = _FakeIntents()
+    broker = LiveBroker(_FakeClient(raises=KalshiError(503, "unavailable")),
+                        intents=intents)
+    await broker.buy("T", "yes", 1, 500, None)
+    assert intents.resolved[0][1]["status"] == "unknown"
+
+
+async def test_every_order_gets_a_distinct_client_order_id():
+    from kbot.engine.broker import LiveBroker
+
+    intents = _FakeIntents()
+    broker = LiveBroker(
+        _FakeClient(result={"fill_count": 1, "order_id": "o", "avg_price_dc": 500}),
+        intents=intents,
+    )
+    for _ in range(25):
+        await broker.buy("T", "yes", 1, 500, None)
+
+    ids = [r["client_order_id"] for r in intents.recorded]
+    assert len(set(ids)) == len(ids)
+
+
+async def test_the_broker_still_works_without_an_intent_log():
+    """Paper mode and tests must not require a database."""
+    from kbot.engine.broker import LiveBroker
+
+    broker = LiveBroker(
+        _FakeClient(result={"fill_count": 1, "order_id": "o", "avg_price_dc": 500})
+    )
+    assert (await broker.buy("T", "yes", 1, 500, None)).ok

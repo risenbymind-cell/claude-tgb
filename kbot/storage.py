@@ -87,6 +87,36 @@ CREATE TABLE IF NOT EXISTS invoices (
 
 CREATE INDEX IF NOT EXISTS idx_invoices_user ON invoices(tg_id, created_at);
 
+-- Every order this process intends to send, written BEFORE it is sent.
+--
+-- The window between "the exchange accepted it" and "we wrote it down" is
+-- where a crash costs you a position you do not know you hold. Persisting the
+-- client_order_id first inverts that: after a restart the worst case is an
+-- intent with no known outcome, which is a question the exchange can answer,
+-- rather than a fill nobody recorded.
+--
+-- client_order_id is the primary key, so replaying the same intent cannot
+-- create a second row, and Kalshi rejects the duplicate on its side too.
+CREATE TABLE IF NOT EXISTS order_intents (
+    client_order_id TEXT PRIMARY KEY,
+    tg_id           INTEGER NOT NULL,
+    ticker          TEXT NOT NULL,
+    action          TEXT NOT NULL,      -- buy | sell
+    side            TEXT NOT NULL,      -- yes | no
+    count           INTEGER NOT NULL,
+    price_dc        INTEGER NOT NULL,
+    mode            TEXT NOT NULL,      -- trading mode at submission time
+    status          TEXT NOT NULL,      -- pending | filled | rejected | unknown
+    order_id        TEXT,
+    filled          INTEGER NOT NULL DEFAULT 0,
+    fee_dc          INTEGER NOT NULL DEFAULT 0,
+    error           TEXT,
+    created_at      REAL NOT NULL,
+    resolved_at     REAL
+);
+CREATE INDEX IF NOT EXISTS idx_intents_pending
+    ON order_intents(status) WHERE status = 'pending';
+
 CREATE TABLE IF NOT EXISTS signals (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     ticker      TEXT NOT NULL,
@@ -214,6 +244,87 @@ class Storage:
 
     def close(self) -> None:
         self._conn.close()
+
+    # ---------------- order intents ----------------
+
+    async def record_intent(
+        self,
+        *,
+        client_order_id: str,
+        tg_id: int,
+        ticker: str,
+        action: str,
+        side: str,
+        count: int,
+        price_dc: int,
+        mode: str,
+    ) -> None:
+        """Write the intent to disk before the order is sent.
+
+        Committed synchronously and deliberately: an intent that is still in a
+        write buffer when the process dies is an intent that was never
+        recorded, which is the exact case this exists to prevent.
+        """
+
+        def go() -> None:
+            self._conn.execute(
+                "INSERT OR IGNORE INTO order_intents "
+                "(client_order_id, tg_id, ticker, action, side, count, price_dc, "
+                " mode, status, created_at) "
+                "VALUES (?,?,?,?,?,?,?,?,'pending',?)",
+                (
+                    client_order_id, tg_id, ticker, action, side, count,
+                    price_dc, mode, time.time(),
+                ),
+            )
+            self._conn.commit()
+
+        await self._run(go)
+
+    async def resolve_intent(
+        self,
+        client_order_id: str,
+        *,
+        status: str,
+        order_id: str | None = None,
+        filled: int = 0,
+        fee_dc: int = 0,
+        error: str | None = None,
+    ) -> None:
+        def go() -> None:
+            self._conn.execute(
+                "UPDATE order_intents SET status=?, order_id=?, filled=?, "
+                "fee_dc=?, error=?, resolved_at=? WHERE client_order_id=?",
+                (status, order_id, filled, fee_dc, error, time.time(),
+                 client_order_id),
+            )
+            self._conn.commit()
+
+        await self._run(go)
+
+    async def pending_intents(self, older_than_s: float = 0.0) -> list[dict[str, Any]]:
+        """Intents with no recorded outcome — the restart-recovery queue."""
+
+        def go() -> list[dict[str, Any]]:
+            cutoff = time.time() - older_than_s
+            rows = self._conn.execute(
+                "SELECT * FROM order_intents WHERE status='pending' "
+                "AND created_at <= ? ORDER BY created_at",
+                (cutoff,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+        return await self._run(go)
+
+    async def intent_exists(self, client_order_id: str) -> bool:
+        def go() -> bool:
+            row = self._conn.execute(
+                "SELECT 1 FROM order_intents WHERE client_order_id=?",
+                (client_order_id,),
+            ).fetchone()
+            return row is not None
+
+        return await self._run(go)
 
     # ---------------- credentials ----------------
 

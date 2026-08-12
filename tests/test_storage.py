@@ -181,3 +181,59 @@ async def test_trades_since_filters_by_time(storage):
     )
     assert len(await storage.trades_since(1, time.time() - 60)) == 1
     assert await storage.trades_since(1, time.time() + 60) == []
+
+
+# ---------------- order intents ----------------
+
+
+async def test_an_intent_survives_being_written(storage):
+    await storage.record_intent(
+        client_order_id="coid-1", tg_id=1, ticker="T", action="buy",
+        side="yes", count=2, price_dc=550, mode="production-live",
+    )
+    pending = await storage.pending_intents()
+    assert len(pending) == 1
+    assert pending[0]["client_order_id"] == "coid-1"
+    assert pending[0]["status"] == "pending"
+    assert pending[0]["mode"] == "production-live"
+
+
+async def test_replaying_the_same_intent_cannot_create_a_second_row(storage):
+    """client_order_id is the primary key, so a retried submission is one
+    order on our side as well as on Kalshi's."""
+    for _ in range(3):
+        await storage.record_intent(
+            client_order_id="coid-dup", tg_id=1, ticker="T", action="buy",
+            side="yes", count=1, price_dc=500, mode="paper",
+        )
+    assert len(await storage.pending_intents()) == 1
+
+
+async def test_a_resolved_intent_leaves_the_pending_queue(storage):
+    await storage.record_intent(
+        client_order_id="coid-2", tg_id=1, ticker="T", action="buy",
+        side="yes", count=1, price_dc=500, mode="demo-live",
+    )
+    await storage.resolve_intent("coid-2", status="filled", order_id="o9", filled=1,
+                               fee_dc=12)
+    assert await storage.pending_intents() == []
+
+
+async def test_an_unknown_outcome_stays_pending_for_reconciliation(storage):
+    """A lost response is the case this table exists for: it must remain
+    visible after a restart until the exchange has been asked."""
+    await storage.record_intent(
+        client_order_id="coid-3", tg_id=1, ticker="T", action="buy",
+        side="yes", count=1, price_dc=500, mode="production-live",
+    )
+    pending = await storage.pending_intents()
+    assert [p["client_order_id"] for p in pending] == ["coid-3"]
+
+
+async def test_intent_exists_reports_known_ids(storage):
+    assert not await storage.intent_exists("nope")
+    await storage.record_intent(
+        client_order_id="coid-4", tg_id=1, ticker="T", action="sell",
+        side="no", count=1, price_dc=400, mode="paper",
+    )
+    assert await storage.intent_exists("coid-4")

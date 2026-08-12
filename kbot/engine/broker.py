@@ -14,6 +14,8 @@ from __future__ import annotations
 import logging
 import time
 import uuid
+
+import httpx
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -23,6 +25,44 @@ from ..kalshi.prices import format_cents
 from ..kalshi.rest import KalshiClient, KalshiError
 
 log = logging.getLogger(__name__)
+
+
+class IntentRecorder:
+    """Binds one user's orders to the durable intent log.
+
+    A thin object rather than passing storage and a user id through every
+    call, so the broker stays testable without a database and paper mode does
+    not acquire one.
+    """
+
+    def __init__(self, storage, tg_id: int, mode: str) -> None:
+        self.storage = storage
+        self.tg_id = tg_id
+        self.mode = mode
+
+    async def record(
+        self,
+        *,
+        client_order_id: str,
+        ticker: str,
+        action: str,
+        side: str,
+        count: int,
+        price_dc: int,
+    ) -> None:
+        await self.storage.record_intent(
+            client_order_id=client_order_id,
+            tg_id=self.tg_id,
+            ticker=ticker,
+            action=action,
+            side=side,
+            count=count,
+            price_dc=price_dc,
+            mode=self.mode,
+        )
+
+    async def resolve(self, client_order_id: str, **kwargs) -> None:
+        await self.storage.resolve_intent(client_order_id, **kwargs)
 
 
 @dataclass
@@ -117,12 +157,104 @@ class PaperBroker:
 
 
 class LiveBroker:
-    """Real orders on the user's own Kalshi account."""
+    """Real orders on the user's own Kalshi account.
+
+    Every submission is preceded by a durable record of the intent, keyed by
+    the `client_order_id` the order will carry. The dangerous window is between
+    the exchange accepting an order and this process writing down that it did:
+    a crash there leaves a position nobody knows about. Writing first inverts
+    the failure into an intent with an unknown outcome, which reconciliation
+    can resolve by asking the exchange.
+    """
 
     paper = False
 
-    def __init__(self, client: KalshiClient) -> None:
+    def __init__(
+        self,
+        client: KalshiClient,
+        *,
+        intents: "IntentRecorder | None" = None,
+    ) -> None:
         self.client = client
+        self.intents = intents
+
+    async def _submit(
+        self,
+        *,
+        ticker: str,
+        action: str,
+        side: str,
+        count: int,
+        price_dc: int,
+        time_in_force: str,
+    ) -> OrderResult:
+        """Persist intent, submit, record the outcome.
+
+        The id is generated here rather than inside the REST layer so that the
+        value written to disk is provably the value sent to the exchange. It
+        stays constant across the client's internal retries, which is what
+        makes a retry idempotent rather than a second order.
+        """
+        client_order_id = str(uuid.uuid4())
+        if self.intents is not None:
+            await self.intents.record(
+                client_order_id=client_order_id,
+                ticker=ticker,
+                action=action,
+                side=side,
+                count=count,
+                price_dc=price_dc,
+            )
+
+        try:
+            order = await self.client.create_order(
+                ticker=ticker,
+                action=action,
+                side=side,
+                count=count,
+                price_dc=price_dc,
+                time_in_force=time_in_force,
+                client_order_id=client_order_id,
+            )
+        except (KalshiError, httpx.HTTPError) as exc:
+            # A transport failure is not proof the order was refused -- the
+            # exchange may have accepted it and the response been lost. Mark it
+            # unknown so reconciliation looks, rather than rejected, which
+            # would quietly close the case on a live position.
+            #
+            # httpx errors are caught here too: the REST client re-raises the
+            # last transport exception when its retries are exhausted, and that
+            # path previously escaped the broker entirely.
+            status = getattr(exc, "status", None)
+            unknown = status is None or status >= 500
+            if self.intents is not None:
+                await self.intents.resolve(
+                    client_order_id,
+                    status="unknown" if unknown else "rejected",
+                    error=str(exc),
+                )
+            return OrderResult(ok=False, error=str(exc))
+
+        filled = int(order["fill_count"])
+        fill_price = order.get("avg_price_dc") or price_dc
+        fee = order.get("fee_dc")
+        fee_dc = fee if fee is not None else estimate_fee_dc(filled, fill_price)
+        if self.intents is not None:
+            await self.intents.resolve(
+                client_order_id,
+                status="filled" if filled else "rejected",
+                order_id=order.get("order_id"),
+                filled=filled,
+                fee_dc=fee_dc if filled else 0,
+            )
+        return OrderResult(
+            ok=bool(filled),
+            order_id=order.get("order_id"),
+            filled=filled,
+            price_dc=fill_price,
+            fee_dc=fee_dc if filled else 0,
+            error=None if filled else "order did not fill at the limit",
+        )
 
     async def balance(self) -> int | None:
         try:
@@ -134,59 +266,19 @@ class LiveBroker:
     async def buy(
         self, ticker: str, side: str, count: int, price_dc: int, book: OrderBook | None
     ) -> OrderResult:
-        try:
-            order = await self.client.create_order(
-                ticker=ticker,
-                action="buy",
-                side=side,
-                count=count,
-                price_dc=price_dc,
-                # Immediate-or-cancel: we want the edge now or not at all. A
-                # resting entry that fills a minute later is a different trade
-                # from the one the strategy signalled.
-                time_in_force="immediate_or_cancel",
-            )
-        except KalshiError as exc:
-            return OrderResult(ok=False, error=str(exc))
-
-        filled = int(order["fill_count"])
-        if filled < 1:
-            return OrderResult(
-                ok=False,
-                order_id=order.get("order_id"),
-                error="order did not fill at the limit",
-            )
-        fill_price = order.get("avg_price_dc") or price_dc
-        fee = order.get("fee_dc")
-        return OrderResult(
-            ok=True,
-            order_id=order.get("order_id"),
-            filled=filled,
-            price_dc=fill_price,
-            # Fall back to the exchange's own formula if it did not report one.
-            fee_dc=fee if fee is not None else estimate_fee_dc(filled, fill_price),
+        # Immediate-or-cancel: we want the edge now or not at all. A resting
+        # entry that fills a minute later is a different trade from the one the
+        # strategy signalled.
+        return await self._submit(
+            ticker=ticker, action="buy", side=side, count=count,
+            price_dc=price_dc, time_in_force="immediate_or_cancel",
         )
 
     async def sell(
         self, ticker: str, side: str, count: int, price_dc: int, book: OrderBook | None
     ) -> OrderResult:
-        try:
-            order = await self.client.create_order(
-                ticker=ticker,
-                action="sell",
-                side=side,
-                count=count,
-                price_dc=price_dc,
-                time_in_force="good_till_canceled",
-            )
-        except KalshiError as exc:
-            return OrderResult(ok=False, error=str(exc))
-        filled = int(order["fill_count"])
-        fee = order.get("fee_dc")
-        return OrderResult(
-            ok=True,
-            order_id=order.get("order_id"),
-            filled=filled,
-            price_dc=price_dc,
-            fee_dc=(fee if fee is not None else estimate_fee_dc(filled, price_dc)),
+        return await self._submit(
+            ticker=ticker, action="sell", side=side, count=count,
+            price_dc=price_dc, time_in_force="good_till_canceled",
         )
+

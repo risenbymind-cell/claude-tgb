@@ -28,7 +28,7 @@ from ..kalshi.ws import BookHistory, MarketFeed
 from ..storage import Storage, Trade, User
 from ..strategy import MarketContext, Signal, get_strategy
 from ..safety import KillSwitch
-from .broker import Broker, LiveBroker, PaperBroker
+from .broker import Broker, IntentRecorder, LiveBroker, PaperBroker
 from .discovery import LiveMarket, MarketDiscovery
 from .reconcile import Reconciler, cancel_orphan_orders
 from .risk import RiskManager, exit_price_for
@@ -396,7 +396,14 @@ class Engine:
                 self.settings.rest_base, signer=signer, client=self._http
             )
             entry = _UserBroker(
-                key_id=user.kalshi_key_id, broker=LiveBroker(client), client=client
+                key_id=user.kalshi_key_id,
+                broker=LiveBroker(
+                    client,
+                    intents=IntentRecorder(
+                        self.storage, user.tg_id, self.settings.mode.value
+                    ),
+                ),
+                client=client,
             )
             self._brokers[cache_key] = entry
         return entry.broker
