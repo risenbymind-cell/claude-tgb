@@ -27,6 +27,7 @@ from ..kalshi.rest import KalshiClient, KalshiError
 from ..kalshi.ws import BookHistory, MarketFeed
 from ..storage import Storage, Trade, User
 from ..strategy import MarketContext, Signal, get_strategy
+from ..safety import KillSwitch
 from .broker import Broker, LiveBroker, PaperBroker
 from .discovery import LiveMarket, MarketDiscovery
 from .reconcile import Reconciler, cancel_orphan_orders
@@ -55,6 +56,10 @@ class Engine:
         self.settings = settings
         self.storage = storage
         self.notify = notify
+        self.kill = KillSwitch(path=settings.kill_file)
+        #: Users already told their live selection is being ignored, so the
+        #: notice does not repeat on every pass.
+        self._downgraded: set[int] = set()
 
         self._http = httpx.AsyncClient(timeout=10.0)
         signer: Signer | None = None
@@ -264,6 +269,23 @@ class Engine:
             )
             return
 
+        # Checked here rather than once per pass: the switch has to be read as
+        # late as possible, or it cannot stop an order already being prepared.
+        kill = self.kill.state()
+        if kill.engaged:
+            # Re-arm the market. The one-signal-per-window key is claimed
+            # before this point so a repeating signal cannot spam the chat,
+            # but nothing was traded here -- leaving it claimed would kill the
+            # market for the rest of the window even after the switch is
+            # released, turning a pause into an outage.
+            self._signalled.pop((user.tg_id, signal.ticker), None)
+            await self.notify(
+                user.tg_id,
+                f"{_signal_header(signal, ctx)}\n\n"
+                f"\u26d4 Skipped \u2014 kill switch {kill.describe()}",
+            )
+            return
+
         result = await broker.buy(
             signal.ticker, signal.side, decision.contracts, signal.price_dc, ctx.book
         )
@@ -318,6 +340,26 @@ class Engine:
         switched back to paper — that position still needs a live broker.
         """
         want_paper = user.get("paper") if paper is None else paper
+
+        # The process mode outranks the per-user toggle. Previously this
+        # boolean was the only thing between a connected account and a real
+        # order, so a stray database write -- or a mis-tapped button -- was
+        # enough. A user can now ask for live all they like; if the process was
+        # not started in a live mode, they get a paper broker.
+        #
+        # Downgrading silently would be its own hazard -- someone watching a
+        # dashboard that says LIVE while fills are simulated will draw exactly
+        # the wrong conclusion from the results -- so say it once per user.
+        if not want_paper and not self.settings.places_real_orders:
+            want_paper = True
+            if user.tg_id not in self._downgraded:
+                self._downgraded.add(user.tg_id)
+                await self.notify(
+                    user.tg_id,
+                    "\u2139\ufe0f You have live mode selected, but this bot is "
+                    f"running in {self.settings.mode.label}. Your trades are "
+                    "simulated. Nothing has been sent to Kalshi.",
+                )
         # Paper and live brokers are cached separately, so toggling the mode
         # does not tear down and rebuild a broker on every pass.
         cache_key = (user.tg_id, want_paper)

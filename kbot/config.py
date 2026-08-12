@@ -10,6 +10,8 @@ from pathlib import Path
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
 
+from .safety import ModeError, TradingMode, resolve_mode
+
 load_dotenv()
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -134,6 +136,8 @@ class Settings:
     master_key: str
     db_path: Path
     demo: bool
+    #: The single authority on where orders go and which host is used.
+    mode: TradingMode = TradingMode.PAPER
     series: dict[str, str] = field(default_factory=dict)
     spot_products: dict[str, str] = field(default_factory=dict)
 
@@ -167,11 +171,23 @@ class Settings:
 
     @property
     def rest_base(self) -> str:
-        return DEMO_REST if self.demo else PROD_REST
+        return DEMO_REST if self.mode.uses_demo_host else PROD_REST
 
     @property
     def ws_url(self) -> str:
-        return DEMO_WS if self.demo else PROD_WS
+        return DEMO_WS if self.mode.uses_demo_host else PROD_WS
+
+    @property
+    def places_real_orders(self) -> bool:
+        return self.mode.places_real_orders
+
+    @property
+    def risks_real_money(self) -> bool:
+        return self.mode.risks_real_money
+
+    @property
+    def kill_file(self) -> Path:
+        return self.db_path.parent / "KILL"
 
     @property
     def has_market_data_creds(self) -> bool:
@@ -292,12 +308,25 @@ def load_settings(*, require_bot: bool = True) -> Settings:
     if not (1 <= port <= 65535):
         raise ConfigError(f"WEBHOOK_PORT must be 1-65535, got {port}")
 
+    # KALSHI_DEMO is only consulted when it was actually set, so that leaving
+    # it unset is not read as "you asked for production".
+    legacy_demo = _env_bool("KALSHI_DEMO") if os.getenv("KALSHI_DEMO") else None
+    try:
+        mode = resolve_mode(
+            os.getenv("TRADING_MODE"),
+            ack=os.getenv("ALLOW_PRODUCTION_ORDERS"),
+            legacy_demo=legacy_demo,
+        )
+    except ModeError as exc:
+        raise ConfigError(str(exc)) from exc
+
     return Settings(
         telegram_token=token,
         admin_ids=admins,
         master_key=master_key,
         db_path=Path(os.getenv("DB_PATH", str(ROOT / "data" / "kbot.sqlite3"))),
-        demo=_env_bool("KALSHI_DEMO", False),
+        demo=mode.uses_demo_host,
+        mode=mode,
         series=_env_json("KALSHI_SERIES", DEFAULT_SERIES),
         spot_products=_env_json("SPOT_PRODUCTS", DEFAULT_SPOT_PRODUCTS),
         payment_provider=provider,

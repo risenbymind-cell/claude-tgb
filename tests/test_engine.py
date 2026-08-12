@@ -12,6 +12,7 @@ import pytest
 from cryptography.fernet import Fernet
 
 from kbot.config import Settings
+from kbot.safety import TradingMode
 from kbot.engine.discovery import LiveMarket
 from kbot.engine.runner import Engine
 from kbot.kalshi.orderbook import OrderBook
@@ -27,6 +28,9 @@ def make_settings(tmp_path) -> Settings:
         master_key=Fernet.generate_key().decode(),
         db_path=tmp_path / "engine.sqlite3",
         demo=True,
+        # This harness exercises the live order path, so the process has to be
+        # in a mode that permits one. Paper mode is covered separately.
+        mode=TradingMode.DEMO_LIVE,
         series={"BTC": "KXBTC15M"},
         spot_products={},
     )
@@ -326,3 +330,76 @@ async def test_signal_cache_is_pruned_when_the_window_rolls(harness):
     harness.engine._prune_signal_cache()
     assert not harness.engine._signalled
     assert harness.engine.history.tickers() == []
+
+
+# ---------------- process mode outranks the per-user toggle ----------------
+
+
+async def test_a_paper_process_cannot_produce_a_live_broker(harness, monkeypatch):
+    """The acceptance criterion: no normal configuration change trades live.
+
+    A user with valid credentials, live selected, and trading enabled still
+    gets a paper broker when the process was not started in a live mode.
+    """
+    from dataclasses import replace
+
+    from kbot.engine.broker import PaperBroker
+    from kbot.safety import TradingMode
+
+    harness.engine.settings = replace(harness.engine.settings, mode=TradingMode.PAPER)
+    await harness.setup_user(mode="auto", paper=False)
+    user = await harness.storage.get_user(1)
+
+    broker = await harness.engine._broker_for(user)
+    assert isinstance(broker, PaperBroker)
+    assert broker.paper is True
+
+
+async def test_the_downgrade_is_announced_not_silent(harness):
+    """Someone reading a dashboard that says LIVE while fills are simulated
+    will draw exactly the wrong conclusion from the results."""
+    from dataclasses import replace
+
+    from kbot.safety import TradingMode
+
+    harness.engine.settings = replace(harness.engine.settings, mode=TradingMode.PAPER)
+    await harness.setup_user(mode="auto", paper=False)
+    user = await harness.storage.get_user(1)
+
+    await harness.engine._broker_for(user)
+    assert any("simulated" in m[1] for m in harness.messages)
+
+    # ...and it does not repeat every pass.
+    before = len(harness.messages)
+    await harness.engine._broker_for(user)
+    assert len(harness.messages) == before
+
+
+async def test_the_kill_switch_stops_an_entry(harness):
+    """Read as late as possible: after the signal, after the risk check, in
+    the moment before the order."""
+    await harness.setup_user(mode="auto", paper=True)
+    harness.place_market()
+    harness.set_book()
+    harness.seed_rising_history()
+
+    harness.engine.kill.engage("test stop", source="admin")
+    await harness.engine._tick()
+
+    assert await harness.storage.open_trades(1) == []
+    assert any("kill switch" in m[1].lower() for m in harness.messages)
+
+
+async def test_trading_resumes_after_the_kill_switch_is_released(harness):
+    await harness.setup_user(mode="auto", paper=True)
+    harness.place_market()
+    harness.set_book()
+    harness.seed_rising_history()
+
+    harness.engine.kill.engage("test stop", source="admin")
+    await harness.engine._tick()
+    assert await harness.storage.open_trades(1) == []
+
+    harness.engine.kill.release()
+    await harness.engine._tick()
+    assert len(await harness.storage.open_trades(1)) == 1
