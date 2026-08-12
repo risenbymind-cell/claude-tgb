@@ -50,11 +50,43 @@ def test_missing_master_key_names_the_generator(env):
         load_settings()
 
 
-def test_a_master_key_that_is_not_a_fernet_key_is_caught_here(env):
+def test_a_short_master_key_is_rejected(env):
     """Otherwise this surfaces as a ValueError from deep inside cryptography."""
     env.setenv("MASTER_KEY", "hunter2")
-    with pytest.raises(ConfigError, match="not a valid Fernet key"):
+    with pytest.raises(ConfigError, match="too short"):
         load_settings()
+
+
+def test_a_proper_fernet_key_is_used_verbatim(env):
+    from cryptography.fernet import Fernet
+
+    key = Fernet.generate_key().decode()
+    env.setenv("MASTER_KEY", key)
+    assert load_settings().master_key == key
+
+
+def test_a_long_random_secret_is_derived_into_a_usable_key(env):
+    """One-click hosts generate their own secrets; those must work too."""
+    from cryptography.fernet import Fernet
+
+    env.setenv("MASTER_KEY", "a" * 40)
+    key = load_settings().master_key
+    Fernet(key.encode())  # usable
+
+
+def test_key_derivation_is_stable_across_restarts(env):
+    """Credentials encrypted before a redeploy must still decrypt after it."""
+    env.setenv("MASTER_KEY", "some-host-generated-secret-value-1234")
+    first = load_settings().master_key
+    second = load_settings().master_key
+    assert first == second
+
+
+def test_different_secrets_derive_different_keys(env):
+    env.setenv("MASTER_KEY", "x" * 40)
+    a = load_settings().master_key
+    env.setenv("MASTER_KEY", "y" * 40)
+    assert load_settings().master_key != a
 
 
 def test_malformed_series_json_says_what_was_expected(env):

@@ -60,7 +60,13 @@ API key; it never holds, moves, or withdraws money.
 paper, live, sell. **[SETUP.md](SETUP.md) is the shorter deployment walkthrough** — BotFather to first paper
 trade, deployment, and payments. The short version:
 
-**One command on a fresh server:**
+**No server at all** — push this repo to your GitHub, then
+[render.com](https://render.com) → New → Blueprint → pick the repo. It prompts
+for a Telegram bot token and your Telegram user ID, generates the `MASTER_KEY`
+itself, and starts both the bot and the recorder with persistent disks. See
+`render.yaml`.
+
+**One command on your own server:**
 
 ```bash
 git clone <this repo> /opt/directionalbot

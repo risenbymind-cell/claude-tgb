@@ -1,0 +1,26 @@
+# Optional companion to deploy/fly.toml: the recorder as its own fly app.
+#
+#   fly launch --config fly.recorder.toml --no-deploy --copy-config
+#   fly volumes create kbot_recordings --size 10
+#   fly secrets set TELEGRAM_BOT_TOKEN=... MASTER_KEY=...
+#   fly deploy --config fly.recorder.toml
+
+app = "directionalbot-recorder"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DB_PATH = "/data/recorder.sqlite3"
+
+[mounts]
+  source = "kbot_recordings"
+  destination = "/data"
+
+[processes]
+  recorder = "python -m kbot.research --dir /data/recordings record --interval 1"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
