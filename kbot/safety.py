@@ -51,9 +51,9 @@ class TradingMode(str, Enum):
     def places_real_orders(self) -> bool:
         """True when an order reaches an exchange at all, demo included.
 
-        Demo orders are not real money, but they are real API calls with real
-        rate limits and real credentials, so everything that guards submission
-        applies to them too.
+        Demo spends demo funds, but the call is a real one: real signing, real
+        rate limits, real fills and rejects. Everything guarding submission
+        therefore applies to it too.
         """
         return self is not TradingMode.PAPER
 
@@ -63,16 +63,32 @@ class TradingMode(str, Enum):
 
     @property
     def uses_demo_host(self) -> bool:
-        """Paper mode reads the production book, because simulating against
-        the demo book would simulate against liquidity that is not there."""
+        """Paper reads the *production* book, deliberately.
+
+        The two non-production modes answer different questions and neither
+        substitutes for the other. Paper asks "is the strategy any good", so it
+        needs genuine liquidity and must not touch the demo book, where the
+        depth is artificial and the resulting P/L is noise. Demo asks "does the
+        order code work" -- signing, fills, partial fills, rejects, rate limits
+        -- and its P/L is not evidence about anything else.
+        """
         return self is TradingMode.DEMO_LIVE
 
     @property
     def label(self) -> str:
         return {
-            TradingMode.PAPER: "PAPER (simulated fills, no orders sent)",
-            TradingMode.DEMO_LIVE: "DEMO-LIVE (real orders, Kalshi demo, no real money)",
-            TradingMode.PRODUCTION_LIVE: "PRODUCTION-LIVE (real orders, real money)",
+            TradingMode.PAPER: (
+                "PAPER (no orders sent; simulated fills against the real "
+                "production book)"
+            ),
+            TradingMode.DEMO_LIVE: (
+                "DEMO-LIVE (real orders on Kalshi's demo exchange, spending "
+                "demo funds; the demo book is thin, so P/L here is not "
+                "evidence about the strategy)"
+            ),
+            TradingMode.PRODUCTION_LIVE: (
+                "PRODUCTION-LIVE (real orders, your own money)"
+            ),
         }[self]
 
 

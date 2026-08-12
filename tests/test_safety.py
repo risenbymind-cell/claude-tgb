@@ -93,10 +93,22 @@ def test_legacy_demo_is_consistent_with_paper():
 
 
 def test_every_mode_has_a_label_naming_the_stakes():
+    """Someone reading the dashboard has to be able to tell, from the label
+    alone, whose money is at risk and whether the P/L means anything."""
     for mode in TradingMode:
         assert mode.label
-    assert "real money" in TradingMode.PRODUCTION_LIVE.label
-    assert "no real money" in TradingMode.DEMO_LIVE.label
+
+    assert "your own money" in TradingMode.PRODUCTION_LIVE.label
+
+    # Demo spends demo funds -- so the label has to say that it is not real,
+    # and equally that its P/L is not evidence, since the demo book is thin.
+    demo = TradingMode.DEMO_LIVE.label
+    assert "demo funds" in demo
+    assert "not" in demo and "evidence" in demo
+
+    # Paper trades against production liquidity; saying so is what stops
+    # someone assuming it is the same thing as demo.
+    assert "production book" in TradingMode.PAPER.label
 
 
 # ---------------- kill switch ----------------
