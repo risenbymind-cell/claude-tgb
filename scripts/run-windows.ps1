@@ -6,8 +6,11 @@
 # then supervises the bot: if it crashes or the network drops, it restarts.
 # Safe to re-run -- an existing .env is left alone.
 #
-#   -Demo       point Kalshi at its demo environment (no real money, ever)
-#   -Live       point Kalshi back at production
+#   -Demo       TRADING_MODE=demo-live: real orders on Kalshi's demo exchange,
+#               spending demo funds. Tests the order code, not the strategy.
+#   -Live       back to TRADING_MODE=paper. It does NOT mean production --
+#               sending real orders needs two variables set by hand, and a
+#               command-line switch must not be able to do it.
 #   -Recorder   run the market recorder instead of the bot
 #   -Once       don't restart on exit; run a single time
 #
@@ -133,6 +136,14 @@ function Get-EnvValue($name) {
 # variable, so the choice survives a restart of this script and shows up in
 # `doctor` and `/status` -- there is no way to be running against production
 # while believing you are on demo.
+function Remove-EnvValue($name) {
+    if (-not (Test-Path $envPath)) { return }
+    $pattern = "^\s*#?\s*$([regex]::Escape($name))\s*="
+    Set-Content -Path $envPath -Encoding UTF8 -Value (
+        @(Get-Content $envPath) | Where-Object { $_ -notmatch $pattern }
+    )
+}
+
 function Set-EnvValue($name, $value) {
     $lines = @()
     if (Test-Path $envPath) { $lines = @(Get-Content $envPath) }
@@ -192,10 +203,26 @@ if (-not (Get-EnvValue "MASTER_KEY")) {
 # --- environment ------------------------------------------------------------
 
 if ($Demo -and $Live) { Fail "Pick one: -Demo or -Live." }
-if ($Demo) { Set-EnvValue "KALSHI_DEMO" "true" }
-if ($Live) { Set-EnvValue "KALSHI_DEMO" "false" }
 
-$onDemo = (Get-EnvValue "KALSHI_DEMO") -match "^(true|1|yes|on)$"
+# TRADING_MODE is the variable that selects a host now. KALSHI_DEMO is
+# deprecated, and leaving a stale one behind is a startup error once
+# TRADING_MODE disagrees with it -- so clear it whenever the mode is set here.
+if ($Demo) {
+    Set-EnvValue "TRADING_MODE" "demo-live"
+    Remove-EnvValue "KALSHI_DEMO"
+}
+if ($Live) {
+    # Deliberately paper, not production. -Live used to mean "the production
+    # host", which is where paper reads from anyway. Sending real orders takes
+    # TRADING_MODE=production-live plus ALLOW_PRODUCTION_ORDERS, set by hand,
+    # and a command-line switch must not be able to do it.
+    Set-EnvValue "TRADING_MODE" "paper"
+    Remove-EnvValue "KALSHI_DEMO"
+}
+
+$modeValue = (Get-EnvValue "TRADING_MODE")
+if (-not $modeValue) { $modeValue = "paper" }
+$onDemo = $modeValue -eq "demo-live"
 
 # --- preflight --------------------------------------------------------------
 
@@ -237,9 +264,11 @@ if ($Recorder) {
 Write-Host ""
 Write-Host "Starting the $what. Leave this window open." -ForegroundColor Green
 if ($onDemo) {
-    Write-Host "Kalshi: DEMO environment -- no real money can move." -ForegroundColor Cyan
+    Write-Host "Mode: DEMO-LIVE -- real orders on Kalshi's demo exchange, demo funds." -ForegroundColor Cyan
+} elseif ($modeValue -eq "production-live") {
+    Write-Host "Mode: PRODUCTION-LIVE -- REAL ORDERS, REAL MONEY." -ForegroundColor Red
 } else {
-    Write-Host "Kalshi: PRODUCTION environment." -ForegroundColor Yellow
+    Write-Host "Mode: PAPER -- nothing is sent to Kalshi." -ForegroundColor Cyan
 }
 Write-Host "Stop it with Ctrl+C. $where" -ForegroundColor DarkGray
 Write-Host ""

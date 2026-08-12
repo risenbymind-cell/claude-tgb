@@ -58,12 +58,30 @@ def test_the_runner_restarts_but_not_on_a_config_error():
     assert "Start-Sleep" in text, "restarts must back off"
 
 
-def test_demo_is_written_to_the_env_file_not_just_exported():
-    """A process variable would leave `doctor` and /status reporting
-    production while the operator believes they are on demo."""
+def test_demo_writes_the_variable_that_actually_selects_a_host():
+    """-Demo wrote KALSHI_DEMO, which stopped selecting anything the moment
+    TRADING_MODE took over. The switch became a silent no-op."""
     text = Path("scripts/run-windows.ps1").read_text(encoding="ascii")
-    assert 'Set-EnvValue "KALSHI_DEMO" "true"' in text
-    assert 'Set-EnvValue "KALSHI_DEMO" "false"' in text
+    assert 'Set-EnvValue "TRADING_MODE" "demo-live"' in text
+    assert 'Remove-EnvValue "KALSHI_DEMO"' in text, (
+        "a stale KALSHI_DEMO becomes a startup error once TRADING_MODE "
+        "disagrees with it"
+    )
+
+
+def test_no_switch_can_reach_production():
+    """Real orders take two variables set by hand. A command-line flag -- or a
+    typo next to one -- must not be able to get there."""
+    text = Path("scripts/run-windows.ps1").read_text(encoding="ascii")
+    # Reading the value to label the banner is fine, and so is a comment
+    # explaining the rule. Writing either variable is not.
+    writes = re.findall(r"Set-EnvValue\s+\"([A-Z_]+)\"\s+\"([^\"]*)\"", text)
+    for name, value in writes:
+        assert name != "ALLOW_PRODUCTION_ORDERS", "the script must not grant the ack"
+        assert value != "production-live", (
+            f"Set-EnvValue {name}=production-live: a switch must not be able to "
+            "turn on real orders"
+        )
 
 
 def test_an_incomplete_env_file_is_repaired_rather_than_skipped():
