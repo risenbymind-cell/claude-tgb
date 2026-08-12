@@ -38,6 +38,26 @@ Set-Location $root
 $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
 
+# Say which commit this is, and whether it is the current one. Running a stale
+# copy after a `git clone` that failed with "already exists" looks exactly like
+# a bug in the current code, and costs a round-trip to work out that it is not.
+try {
+    $head = (git rev-parse --short HEAD 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $head) {
+        Write-Host "DirectionalBot $head" -ForegroundColor DarkGray
+        git fetch --quiet 2>$null
+        $behind = (git rev-list --count "HEAD..@{u}" 2>$null)
+        if ($LASTEXITCODE -eq 0 -and $behind -and [int]$behind -gt 0) {
+            Write-Host ""
+            Write-Host "You are $behind commit(s) behind. Run 'git pull' -- the fix for" -ForegroundColor Yellow
+            Write-Host "whatever you are about to hit may already be there." -ForegroundColor Yellow
+            Write-Host ""
+        }
+    }
+} catch {
+    # No git, no network, no upstream: none of that should stop the bot.
+}
+
 function Fail($message) {
     Write-Host ""
     Write-Host $message -ForegroundColor Red
@@ -135,15 +155,24 @@ $haveToken = $token -and $token -notmatch "your-bot-token"
 
 if (-not $haveToken) {
     Write-Host ""
+    # The wizard refuses to overwrite an existing .env without --force, which is
+    # right when the file is someone's real configuration and wrong here, where
+    # we have already established it has no token in it. Keep a copy either way
+    # rather than deciding on their behalf that nothing in it mattered.
+    $setupArgs = @("-m", "kbot.tools", "setup")
     if (Test-Path $envPath) {
+        $backup = "$envPath.bak-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+        Copy-Item $envPath $backup
+        $setupArgs += "--force"
         Write-Host "The .env here has no bot token yet -- let's finish it." -ForegroundColor Cyan
+        Write-Host "The old one is saved as $(Split-Path -Leaf $backup)." -ForegroundColor DarkGray
     } else {
         Write-Host "First run -- let's write the configuration." -ForegroundColor Cyan
     }
     Write-Host "You need two things: your bot token from @BotFather, and your"
     Write-Host "Telegram user ID from @userinfobot. Everything else is generated."
     Write-Host ""
-    & $venvPython -m kbot.tools setup
+    & $venvPython @setupArgs
     if ($LASTEXITCODE -ne 0) { Fail "Setup did not complete. Nothing was written." }
 }
 

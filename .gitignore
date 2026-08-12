@@ -1,4 +1,8 @@
+# .env.* covers the timestamped backups the Windows runner takes before
+# rewriting a broken config -- those hold a real bot token.
 .env
+.env.*
+!.env.example
 data/
 secrets/
 *.pem

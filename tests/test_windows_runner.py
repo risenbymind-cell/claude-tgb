@@ -79,6 +79,24 @@ def test_an_incomplete_env_file_is_repaired_rather_than_skipped():
     )
 
 
+def test_the_wizard_is_forced_when_a_tokenless_env_is_in_the_way():
+    """`kbot.tools setup` refuses to overwrite an existing .env without
+    --force, so calling it plainly meant the repair path could never repair
+    anything -- it printed 'Nothing was changed' and died."""
+    text = Path("scripts/run-windows.ps1").read_text(encoding="ascii")
+    assert '"--force"' in text, "the wizard cannot rewrite a .env without it"
+    assert "Copy-Item $envPath $backup" in text, (
+        "forcing over a config file requires keeping a copy of it first"
+    )
+
+
+def test_env_backups_cannot_be_committed():
+    """A backup of a .env holds a live bot token."""
+    ignored = Path(".gitignore").read_text().splitlines()
+    assert ".env.*" in ignored, ".env.bak-* would otherwise be committable"
+    assert "!.env.example" in ignored, ".env.example must stay tracked"
+
+
 def test_python_runs_in_utf8_mode():
     """The preflight prints check marks; a legacy codepage cannot encode them."""
     text = Path("scripts/run-windows.ps1").read_text(encoding="ascii")
