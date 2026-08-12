@@ -58,7 +58,9 @@ HELP = """<b>Modes</b>
 • <b>Auto</b> — the bot places the order on your account the moment a signal fires.
 
 <b>Paper vs live</b>
-Paper mode runs the identical code path against real live prices and simulates the fill. Nothing reaches Kalshi. Switch to live only after you've watched it trade.
+Paper mode runs the identical code path against the real production order book and simulates the fill. Nothing reaches Kalshi, and no account is needed. Because the liquidity is genuine, paper results are the ones worth measuring.
+
+The bot as a whole runs in one of three modes, set by whoever operates it: <b>paper</b> (nothing sent), <b>demo-live</b> (real orders, Kalshi's demo balance, thin book — tests the plumbing, not the strategy), or <b>production-live</b> (real orders, real money). If the operator runs it in paper, your live toggle cannot override that. /health shows which one you are in.
 
 <b>Exits</b>
 A sell order goes in as soon as an entry fills — either a fixed number of cents above entry or an absolute target price. If neither fills, the window settles at 100c or 0c and the bot books the result.
@@ -70,7 +72,10 @@ Daily loss limit, max open exposure, a balance floor the bot won't spend below, 
 Create an API key at kalshi.com under Account → API Keys. You'll get a key ID and an RSA private key file. Send both with /connect. The private key is encrypted before it is stored, and your message is deleted from the chat straight after.
 
 <b>Commands</b>
-/dashboard · /positions · /pnl · /stats · /status · /stop · /disconnect
+/dashboard · /positions · /pnl · /stats · /status · /health · /stop · /disconnect
+
+<b>Admin</b>
+/kill stops every order immediately, for everyone, and survives a restart. /resume clears it. /genkeys mints access keys.
 
 <b>Results channel</b>
 <code>/share on</code> posts your closed trades to the public results channel — anonymously, no username or account detail, and losses are posted alongside wins. Off by default.
@@ -222,6 +227,9 @@ class Bot:
             "grant": self._cmd_grant,
             "sales": self._cmd_sales,
             "confirm": self._cmd_confirm,
+            "kill": self._cmd_kill,
+            "resume": self._cmd_resume,
+            "health": self._cmd_health,
         }
         handler = handlers.get(command)
         if handler is None:
@@ -466,6 +474,82 @@ class Bot:
         await self._send_dashboard(await self._reload(user))
 
     # ---------------- admin ----------------
+
+    async def _cmd_kill(self, user: User, args: list[str], message: dict) -> None:
+        """Stop every order immediately, for everyone.
+
+        Admin-only and deliberately unconditional: there is no confirmation
+        step, because the whole value of a kill switch is that it works on the
+        first press by someone who is already alarmed. Turning it back on is
+        the step that should be difficult, and that is /resume.
+        """
+        if not self._is_admin(user):
+            await self.tg.send_message(user.tg_id, "Admins only.")
+            return
+        reason = " ".join(args).strip() or f"/kill by {user.tg_id}"
+        state = self.engine.kill.engage(reason, source="telegram")
+        await self.tg.send_message(
+            user.tg_id,
+            "🛑 <b>KILL SWITCH ENGAGED</b>\n\n"
+            "No further orders will be placed by anyone. Open positions are "
+            "left alone — close them yourself if you need to.\n\n"
+            f"Reason: {html.escape(reason)}\n"
+            f"Persisted to disk, so it survives a restart.\n\n"
+            "Clear it with /resume.",
+        )
+        log.warning("Kill switch engaged from Telegram by %s", user.tg_id)
+        _ = state
+
+    async def _cmd_resume(self, user: User, args: list[str], message: dict) -> None:
+        if not self._is_admin(user):
+            await self.tg.send_message(user.tg_id, "Admins only.")
+            return
+        before = self.engine.kill.state()
+        if not before.engaged:
+            await self.tg.send_message(user.tg_id, "The kill switch is already clear.")
+            return
+
+        self.engine.kill.release()
+        after = self.engine.kill.state()
+        if after.engaged:
+            # An environment-variable switch cannot be cleared from inside the
+            # process, and saying "resumed" when it is still engaged would be
+            # the most dangerous possible lie here.
+            await self.tg.send_message(
+                user.tg_id,
+                "⚠️ Still engaged — "
+                f"{html.escape(after.describe())}.\n\n"
+                "This one is set outside the bot. Unset KILL_SWITCH in the "
+                "environment and restart.",
+            )
+            return
+        await self.tg.send_message(
+            user.tg_id, "✅ Kill switch cleared. Trading resumes on the next signal."
+        )
+
+    async def _cmd_health(self, user: User, args: list[str], message: dict) -> None:
+        """One screen answering: is it safe, is it fed, is it alive."""
+        kill = self.engine.kill.state()
+        mode = self.settings.mode
+        feed = self.engine.feed
+
+        books = getattr(feed, "books", {}) or {}
+        fresh = sum(1 for b in books.values() if not b.is_stale)
+        desynced = sum(1 for b in books.values() if getattr(b, "desynced", False))
+        connected = getattr(feed, "_connected", False)
+
+        lines = [
+            "<b>Health</b>",
+            "",
+            f"Mode: <b>{html.escape(mode.label)}</b>",
+            f"Kill switch: <b>{html.escape(kill.describe())}</b>",
+            "",
+            f"Feed: {'websocket' if connected else 'REST polling'}",
+            f"Books: {fresh}/{len(books)} usable",
+        ]
+        if desynced:
+            lines.append(f"⚠️ {desynced} book(s) desynced, awaiting re-snapshot")
+        await self.tg.send_message(user.tg_id, "\n".join(lines))
 
     def _is_admin(self, user: User) -> bool:
         return user.tg_id in self.settings.admin_ids

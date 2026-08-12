@@ -156,3 +156,96 @@ def test_access_line_wording():
         access_until = 0.0
 
     assert "lifetime" in ui.access_line(Fake())
+
+
+# ---------------- kill switch over Telegram ----------------
+
+
+async def _sent(bot):
+    """Capture outgoing messages instead of calling Telegram."""
+    out: list[tuple[int, str]] = []
+
+    async def send(tg_id, text, **kwargs):
+        out.append((tg_id, text))
+        return {}
+
+    bot.tg.send_message = send
+    return out
+
+
+async def test_only_an_admin_can_pull_the_kill_switch(bot):
+    out = await _sent(bot)
+    await bot.storage.upsert_user(1, "trader")
+    ordinary = await bot.storage.get_user(1)
+
+    await bot._cmd_kill(ordinary, [], {})
+
+    assert not bot.engine.kill.engaged
+    assert "Admins only" in out[-1][1]
+
+
+async def test_an_admin_kill_engages_and_persists(bot):
+    out = await _sent(bot)
+    await bot.storage.upsert_user(99, "boss")
+    admin = await bot.storage.get_user(99)
+
+    await bot._cmd_kill(admin, ["market", "looks", "wrong"], {})
+
+    state = bot.engine.kill.state()
+    assert state.engaged
+    assert "market looks wrong" in (state.reason or "")
+    assert "KILL SWITCH ENGAGED" in out[-1][1]
+    # Persisted, so a restart cannot resume trading on its own.
+    assert bot.settings.kill_file.exists()
+
+
+async def test_resume_clears_it(bot):
+    out = await _sent(bot)
+    await bot.storage.upsert_user(99, "boss")
+    admin = await bot.storage.get_user(99)
+
+    await bot._cmd_kill(admin, [], {})
+    await bot._cmd_resume(admin, [], {})
+
+    assert not bot.engine.kill.engaged
+    assert "cleared" in out[-1][1]
+
+
+async def test_resume_admits_when_it_cannot_clear_an_env_switch(bot, monkeypatch):
+    """Reporting "resumed" while the switch is still engaged would be the most
+    dangerous possible lie in this file."""
+    out = await _sent(bot)
+    await bot.storage.upsert_user(99, "boss")
+    admin = await bot.storage.get_user(99)
+
+    await bot._cmd_kill(admin, [], {})
+    monkeypatch.setenv("KILL_SWITCH", "1")
+    await bot._cmd_resume(admin, [], {})
+
+    assert bot.engine.kill.engaged
+    assert "Still engaged" in out[-1][1]
+
+
+async def test_only_an_admin_can_resume(bot):
+    out = await _sent(bot)
+    await bot.storage.upsert_user(99, "boss")
+    admin = await bot.storage.get_user(99)
+    await bot._cmd_kill(admin, [], {})
+
+    await bot.storage.upsert_user(1, "trader")
+    ordinary = await bot.storage.get_user(1)
+    await bot._cmd_resume(ordinary, [], {})
+
+    assert bot.engine.kill.engaged, "a non-admin must not be able to resume"
+    assert "Admins only" in out[-1][1]
+
+
+async def test_health_names_the_mode_and_the_switch(bot):
+    out = await _sent(bot)
+    await bot.storage.upsert_user(1, "trader")
+    who = await bot.storage.get_user(1)
+
+    await bot._cmd_health(who, [], {})
+    text = out[-1][1]
+    assert "Mode:" in text and "Kill switch:" in text
+    assert "PAPER" in text
