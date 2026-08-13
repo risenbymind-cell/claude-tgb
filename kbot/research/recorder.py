@@ -50,6 +50,7 @@ class Recorder:
             except InvalidPrivateKey as exc:
                 log.error("Platform key unusable (%s); recording via REST polling.", exc)
 
+        self._signer = signer
         self.rest = KalshiClient(settings.rest_base, signer=signer, client=self._http)
         self.feed = MarketFeed(
             settings.ws_url,
@@ -62,6 +63,7 @@ class Recorder:
         #: Markets seen but not yet settled, so expiry can be resolved later.
         self._pending_settlement: dict[str, float] = {}
         self._settled: set[str] = set()
+        self._empty_passes = 0
         self._stop = asyncio.Event()
 
     async def run(self, duration: float | None = None) -> None:
@@ -90,6 +92,11 @@ class Recorder:
     def stop(self) -> None:
         self._stop.set()
 
+    #: Consecutive discovery passes returning nothing before the transport is
+    #: rebuilt. Three passes at the default interval is about a minute -- long
+    #: enough not to fire on a blip, short enough to lose almost no data.
+    EMPTY_PASSES_BEFORE_RESET = 3
+
     async def _discovery_loop(self) -> None:
         while True:
             try:
@@ -101,9 +108,49 @@ class Recorder:
                     )
             except asyncio.CancelledError:
                 raise
+            except asyncio.CancelledError:
+                raise
             except Exception:  # noqa: BLE001 - a bad pass must not stop recording
                 log.exception("Discovery failed")
+                self._empty_passes += 1
+            else:
+                self._empty_passes = 0 if markets else self._empty_passes + 1
+
+            # A recorder that stays alive while capturing nothing is worse than
+            # one that crashes: the process looks healthy, the log looks calm,
+            # and a day of data quietly does not exist. This happened -- nine
+            # hours of "0 market(s) live" while Kalshi had nine markets open,
+            # because the HTTP connections had died under a suspended container
+            # and nothing noticed.
+            if self._empty_passes >= self.EMPTY_PASSES_BEFORE_RESET:
+                log.error(
+                    "No markets discovered for %d consecutive passes -- "
+                    "rebuilding the HTTP client. If this repeats, check "
+                    "`python -m kbot.tools markets`.",
+                    self._empty_passes,
+                )
+                await self._reset_transport()
+                self._empty_passes = 0
+
             await asyncio.sleep(self.settings.discovery_interval_s)
+
+    async def _reset_transport(self) -> None:
+        """Replace the HTTP client and re-arm the feed.
+
+        A pooled connection that died while the process was stopped does not
+        raise on reuse in any way the discovery loop can distinguish from an
+        empty result -- so recovery is a rebuild rather than a retry.
+        """
+        try:
+            await self._http.aclose()
+        except Exception:  # noqa: BLE001 - it is being discarded anyway
+            pass
+        self._http = httpx.AsyncClient(timeout=10.0)
+        self.rest = KalshiClient(
+            self.settings.rest_base, signer=self._signer, client=self._http
+        )
+        self.discovery.client = self.rest
+        self.feed.rest = self.rest
 
     async def _sample_loop(self) -> None:
         last_report = time.time()

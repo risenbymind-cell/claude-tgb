@@ -36,7 +36,7 @@ def cmd_markets() -> int:
     from .engine.discovery import MarketDiscovery
     from .kalshi.rest import KalshiClient
 
-    settings = load_settings()
+    settings = load_settings(require_bot=False)
 
     async def run() -> None:
         client = KalshiClient(settings.rest_base)
@@ -71,7 +71,7 @@ def cmd_series() -> int:
     from .config import load_settings
     from .kalshi.rest import KalshiClient
 
-    settings = load_settings()
+    settings = load_settings(require_bot=False)
 
     async def run() -> None:
         client = KalshiClient(settings.rest_base)
