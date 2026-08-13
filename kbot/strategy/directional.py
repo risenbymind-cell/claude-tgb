@@ -287,3 +287,117 @@ class HammerStrategy:
                 "seconds_left": ctx.seconds_to_close,
             },
         )
+
+
+class ReversionStrategy:
+    """Fade a contract that has extended from its own session consensus.
+
+    This is the one hypothesis the transcript corpus keeps restating, moved
+    onto Kalshi's own data (see research/CORPUS.md):
+
+        Price extended from a fair-value anchor, where "far" is measured in
+        units of the instrument's own realised range, reverts toward the anchor.
+
+    Anchor is the window's depth-weighted VWAP; the unit is the window's own
+    high-low range. Both come from the contract, because there is no external
+    feed -- see kalshi/session.py for why that translation is defensible and
+    what it costs.
+
+    Three things the corpus insists on that are kept here:
+
+    * **Size matters, monotonically.** 20% of the daily range is the threshold
+      it names, and it treats 70-90% as far better rather than merely also
+      qualifying. Confidence therefore scales with extension instead of
+      switching on at a boundary.
+    * **Aggression, not drift.** A move that got there fast is the one it fades.
+      Velocity must agree in sign with the extension.
+    * **Room to revert.** Its target is the opposite side of the box, which
+      takes time. A binary contract with ninety seconds left cannot deliver
+      that however wrong the price is, so the entry window closes early.
+
+    NOTHING HERE IS KNOWN TO BE PROFITABLE. The reasoning is sound and the
+    hypothesis is testable; that is all. Score it with `kbot.research signals`
+    and `replay` on 200+ recorded windows before it goes near real money.
+    """
+
+    name = "reversion"
+    description = "Fades price extended from its own session VWAP."
+
+    #: Extension at which a fade is worth considering, in session-range units.
+    #: The corpus's threshold is 20% of the *daily* range; a 15-minute window's
+    #: own range is a much smaller unit, so this is deliberately larger and is
+    #: a starting point for a sweep, not a fitted value.
+    MIN_EXTENSION = 0.30
+
+    #: Extension treated as full strength, for scaling confidence.
+    FULL_EXTENSION = 0.75
+
+    #: The move has to have been going the way it is extended.
+    MIN_VELOCITY_DC = 5.0
+
+    #: Reverting to VWAP takes time; below this there is not enough of it.
+    MIN_SECONDS_LEFT = 150.0
+
+    def __init__(self, filters: Filters | None = None) -> None:
+        # A fade needs a wider spread tolerance than a momentum entry -- it is
+        # deliberately trading a market that just moved, and those are wider.
+        self.filters = filters or Filters(max_spread=80, min_seconds_left=150.0)
+
+    def evaluate(self, ctx: MarketContext) -> Signal | None:
+        if self.filters.reject(ctx):
+            return None
+        if ctx.seconds_to_close < self.MIN_SECONDS_LEFT:
+            return None
+
+        extension = ctx.extension
+        if extension is None or abs(extension) < self.MIN_EXTENSION:
+            return None
+
+        velocity = ctx.velocity_dc
+        if velocity is None:
+            return None
+        # Extended up on a move that is going up -- that is the aggression the
+        # corpus fades. Extended up while already falling back is a reversion
+        # already under way, and the edge in joining it late is the part that
+        # has been given away.
+        if extension > 0 and velocity < self.MIN_VELOCITY_DC:
+            return None
+        if extension < 0 and velocity > -self.MIN_VELOCITY_DC:
+            return None
+
+        # Fade it: extended above consensus means buy NO.
+        side = "no" if extension > 0 else "yes"
+        book = ctx.book
+        price_dc = book.yes_ask if side == "yes" else book.no_ask
+        if price_dc is None:
+            return None
+        if not (self.filters.min_price <= price_dc <= self.filters.max_price):
+            return None
+
+        strength = _clamp(
+            (abs(extension) - self.MIN_EXTENSION)
+            / max(1e-9, self.FULL_EXTENSION - self.MIN_EXTENSION)
+        )
+        # Confidence is bounded well below certainty on purpose. This is an
+        # untested hypothesis, and a number near 1.0 would licence position
+        # sizes the evidence does not support.
+        confidence = 0.50 + 0.35 * strength
+
+        return Signal(
+            coin=ctx.coin,
+            ticker=ctx.ticker,
+            side=side,
+            confidence=confidence,
+            price_dc=price_dc,
+            reason=(
+                f"{abs(extension):.2f}x session range "
+                f"{'above' if extension > 0 else 'below'} VWAP"
+            ),
+            detail={
+                "extension": round(extension, 3),
+                "vwap_dc": round(ctx.vwap_dc or 0.0, 1),
+                "range_dc": round(ctx.session_range_dc or 0.0, 1),
+                "velocity_dc": round(velocity, 1),
+                "seconds_left": round(ctx.seconds_to_close),
+            },
+        )

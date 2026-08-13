@@ -1,8 +1,20 @@
 from .base import MarketContext, Signal, Strategy
-from .directional import DriftStrategy, FadeStrategy, Filters, HammerStrategy
+from .directional import (
+    DriftStrategy,
+    FadeStrategy,
+    Filters,
+    HammerStrategy,
+    ReversionStrategy,
+)
 
 REGISTRY: dict[str, Strategy] = {
-    s.name: s for s in (DriftStrategy(), FadeStrategy(), HammerStrategy())
+    s.name: s
+    for s in (
+        DriftStrategy(),
+        FadeStrategy(),
+        HammerStrategy(),
+        ReversionStrategy(),
+    )
 }
 
 #: Strategy names that have been renamed, so a user's saved setting survives.

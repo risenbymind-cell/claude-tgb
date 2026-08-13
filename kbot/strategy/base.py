@@ -34,6 +34,16 @@ class MarketContext:
     #: timestamp — measuring against real time would reject every historical
     #: snapshot as stale and silently produce an empty backtest.
     book_age_s: float = 0.0
+    #: Session statistics for this market window, all in deci-cents and all
+    #: derived from Kalshi alone. None until the window has enough samples to
+    #: mean anything -- a VWAP over five ticks is not a consensus.
+    vwap_dc: float | None = None
+    session_range_dc: float | None = None
+    #: (mid - vwap) / session range. Positive is extended above consensus.
+    extension: float | None = None
+    #: Change in mid over the trailing ~20s, in deci-cents. Distinguishes an
+    #: aggressive move from a drift that arrived at the same place.
+    velocity_dc: float | None = None
     spot: float | None = None
     spot_change_pct: float | None = None
     title: str = ""

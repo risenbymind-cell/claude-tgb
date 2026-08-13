@@ -24,6 +24,7 @@ from ..kalshi.auth import InvalidPrivateKey, Signer
 from ..kalshi.fees import fee_dc as estimate_fee_dc
 from ..kalshi.prices import format_cents, format_dollars
 from ..kalshi.rest import KalshiClient, KalshiError
+from ..kalshi.session import SessionStats
 from ..kalshi.ws import BookHistory, MarketFeed
 from ..storage import Storage, Trade, User
 from ..strategy import MarketContext, Signal, get_strategy
@@ -85,6 +86,7 @@ class Engine:
         self.risk = RiskManager(storage)
         self.reconciler = Reconciler(storage)
         self.history = BookHistory()
+        self.session = SessionStats()
 
         self._brokers: dict[tuple[int, bool], _UserBroker] = {}
         self._signalled: dict[tuple[int, str], float] = {}
@@ -163,6 +165,16 @@ class Engine:
             fair = book.microprice()
             if fair is not None:
                 self.history.observe(market.ticker, fair, now)
+                self.session.observe(
+                    market.ticker,
+                    fair,
+                    book.depth("yes") + book.depth("no"),
+                    market.open_time,
+                    now,
+                )
+        # Session state is per market window and would otherwise accumulate one
+        # entry per market forever.
+        self.session.prune({m.ticker for m in self.discovery.markets.values()})
 
     def _context(self, market: LiveMarket) -> MarketContext | None:
         book = self.feed.book(market.ticker)
@@ -177,6 +189,14 @@ class Engine:
             fv_change_5s=self.history.change_over(market.ticker, 5),
             fv_change_20s=self.history.change_over(market.ticker, 20),
             fv_change_60s=self.history.change_over(market.ticker, 60),
+            vwap_dc=self.session.vwap(market.ticker),
+            session_range_dc=self.session.range_dc(market.ticker),
+            extension=(
+                None
+                if book.mid is None
+                else self.session.extension(market.ticker, book.mid)
+            ),
+            velocity_dc=self.session.velocity_dc(market.ticker, time.time()),
             samples=self.history.samples(market.ticker),
             book_age_s=book.age(),
             spot=self.spot.price(market.coin),

@@ -28,6 +28,7 @@ from typing import Iterable
 from ..kalshi.fees import fee_dc, min_profitable_exit_dc
 from ..kalshi.orderbook import OrderBook
 from ..kalshi.prices import cents_to_dc
+from ..kalshi.session import SessionStats
 from ..kalshi.ws import BookHistory
 from ..strategy import MarketContext, Signal, get_strategy
 from .store import BookRecord, load_session
@@ -128,6 +129,7 @@ def replay_market(
 
     strategy = get_strategy(config.strategy)
     history = BookHistory()
+    session = SessionStats()
     min_dc = cents_to_dc(config.min_entry_cents)
     max_dc = cents_to_dc(config.max_entry_cents)
     trade: ReplayTrade | None = None
@@ -137,6 +139,13 @@ def replay_market(
         fair = book.microprice()
         if fair is not None:
             history.observe(rec.ticker, fair, rec.t)
+            session.observe(
+                rec.ticker,
+                fair,
+                book.depth("yes") + book.depth("no"),
+                rec.open_time,
+                rec.t,
+            )
 
         if trade is None:
             ctx = MarketContext(
@@ -149,6 +158,12 @@ def replay_market(
                 fv_change_20s=history.change_over(rec.ticker, 20, rec.t),
                 fv_change_60s=history.change_over(rec.ticker, 60, rec.t),
                 samples=history.samples(rec.ticker),
+                vwap_dc=session.vwap(rec.ticker),
+                session_range_dc=session.range_dc(rec.ticker),
+                extension=(
+                    None if fair is None else session.extension(rec.ticker, fair)
+                ),
+                velocity_dc=session.velocity_dc(rec.ticker, rec.t),
                 # A snapshot is by definition current at its own timestamp.
                 book_age_s=0.0,
             )
