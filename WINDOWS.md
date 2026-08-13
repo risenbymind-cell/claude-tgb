@@ -161,8 +161,33 @@ answers **403 to any request carrying a browser `Origin` header**. A page
 cannot call their API at all. Your browser talks to localhost; this process —
 which sends no Origin — talks to Kalshi.
 
+### On your phone
+
 ```powershell
-# point it at Kalshi's demo exchange instead
+.venv\Scripts\python -m kbot.webui --phone
+```
+
+It prints a link with a token in it:
+
+```
+   http://192.168.1.24:8787/?t=CpEvz2TXUV8fZa5LtWutKQ
+```
+
+Open that on your phone, on the same Wi-Fi. Then **Share → Add to Home
+Screen** and it launches full-screen like an app.
+
+> **Treat that link as a password.** Leaving localhost is what makes the desk
+> reachable from your phone, and localhost was the only thing authenticating
+> it. The token is generated fresh each start and is the sole barrier between
+> your network and a port that can place orders. Don't run `--phone` on a
+> network you don't control.
+
+The layout becomes cards on a narrow screen — each market and each trade is
+one block with its own labels, so the columns that matter aren't hidden behind
+a sideways scroll.
+
+```powershell
+# other options
 .venv\Scripts\python -m kbot.webui --strategy timed --size 5 --target 20
 ```
 

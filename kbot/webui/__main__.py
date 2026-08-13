@@ -10,7 +10,7 @@ import sys
 from ..config import ConfigError, load_settings
 from ..redact import install as install_redaction
 from .desk import Desk
-from .server import DeskServer
+from .server import DeskServer, lan_address
 
 
 async def run(args: argparse.Namespace) -> int:
@@ -35,9 +35,24 @@ async def run(args: argparse.Namespace) -> int:
     desk.strategy = args.strategy
     desk.start()
 
-    server = DeskServer(desk, host=args.host, port=args.port)
+    host = "0.0.0.0" if args.phone else args.host
+    server = DeskServer(desk, host=host, port=args.port)
     await server.start()
-    print(f"\n  Desk running:  http://{args.host}:{args.port}\n  Ctrl+C to stop.\n")
+
+    print()
+    if args.phone:
+        lan = lan_address()
+        print("  Desk is on your network. Open this on your phone:")
+        print(f"\n     {server.url(lan)}\n")
+        print("  Same Wi-Fi as this computer. The token in that link is the")
+        print("  only thing standing between the network and a port that can")
+        print("  place orders -- treat the link as a password, and do not run")
+        print("  --phone on a network you do not trust.")
+        print("\n  On the phone: Share -> Add to Home Screen for a full-screen app.")
+    else:
+        print(f"  Desk running:  {server.url()}")
+        print("  Add --phone to reach it from your phone on the same Wi-Fi.")
+    print("\n  Ctrl+C to stop.\n")
 
     try:
         await asyncio.Event().wait()
@@ -59,6 +74,8 @@ def main() -> int:
     logging.getLogger("websockets").setLevel(logging.WARNING)
 
     p = argparse.ArgumentParser(prog="python -m kbot.webui")
+    p.add_argument("--phone", action="store_true",
+                   help="serve on the local network with a token, for a phone")
     p.add_argument("--host", default="127.0.0.1",
                    help="bind address; anything but localhost exposes order placement")
     p.add_argument("--port", type=int, default=8787)

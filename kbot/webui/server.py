@@ -16,6 +16,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import secrets
+import socket
 from pathlib import Path
 
 from .desk import Desk
@@ -26,7 +28,34 @@ MAX_BODY_BYTES = 64 * 1024
 PAGE = Path(__file__).resolve().parent.parent.parent / "site" / "desk.html"
 
 
-def _response(status: str, body: bytes, content_type: str) -> bytes:
+def lan_address() -> str:
+    """This machine's address on the local network.
+
+    Opens a UDP socket toward a public address and asks the kernel which
+    interface it would use. Nothing is sent -- UDP connect only sets the
+    destination -- so it works offline and costs no round trip.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+def _response(
+    status: str, body: bytes, content_type: str, *, set_token: str | None = None
+) -> bytes:
+    cookie = ""
+    if set_token:
+        # SameSite=Strict so another site cannot drive the desk with the
+        # browser's stored token. HttpOnly because no script needs to read it.
+        cookie = (
+            f"Set-Cookie: desk_token={set_token}; Path=/; "
+            "HttpOnly; SameSite=Strict; Max-Age=604800\r\n"
+        )
     return (
         f"HTTP/1.1 {status}\r\n"
         f"Content-Type: {content_type}\r\n"
@@ -36,7 +65,9 @@ def _response(status: str, body: bytes, content_type: str) -> bytes:
         "Cache-Control: no-store\r\n"
         "X-Frame-Options: DENY\r\n"
         "X-Content-Type-Options: nosniff\r\n"
-        "Connection: close\r\n\r\n"
+        "Connection: close\r\n"
+        + cookie
+        + "\r\n"
     ).encode() + body
 
 
@@ -44,20 +75,62 @@ def _json(obj, status: str = "200 OK") -> bytes:
     return _response(status, json.dumps(obj).encode(), "application/json")
 
 
+LOCAL_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
 class DeskServer:
-    def __init__(self, desk: Desk, host: str = "127.0.0.1", port: int = 8787) -> None:
+    """Serves the desk, and gates it whenever it is reachable off-machine.
+
+    On localhost the operating system is the boundary: only this machine can
+    connect, so a password would protect nothing. The moment the bind address
+    leaves localhost that stops being true -- anyone on the Wi-Fi, including
+    whatever else is on a cafe network, can reach a port that places orders.
+    A token is then mandatory rather than optional, and is generated rather
+    than chosen so there is no weak one.
+    """
+
+    def __init__(
+        self,
+        desk: Desk,
+        host: str = "127.0.0.1",
+        port: int = 8787,
+        token: str | None = None,
+    ) -> None:
         self.desk = desk
         self.host = host
         self.port = port
+        self.local_only = host in LOCAL_HOSTS
+        # Generated unconditionally when exposed. Never derived from anything
+        # guessable, and never taken from configuration.
+        self.token = token or (None if self.local_only else secrets.token_urlsafe(16))
         self._server: asyncio.AbstractServer | None = None
+
+    def url(self, host: str | None = None) -> str:
+        base = f"http://{host or self.host}:{self.port}/"
+        return base + (f"?t={self.token}" if self.token else "")
+
+    def _authorised(self, head: str, query: str) -> bool:
+        if self.token is None:
+            return True
+        if f"t={self.token}" in query:
+            return True
+        for line in head.split("\r\n"):
+            low = line.lower()
+            if low.startswith("cookie:") and f"desk_token={self.token}" in line:
+                return True
+            if low.startswith("x-desk-token:"):
+                # Constant-time so a timing signal cannot leak the token.
+                if secrets.compare_digest(line.split(":", 1)[1].strip(), self.token):
+                    return True
+        return False
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle, self.host, self.port)
-        if self.host not in ("127.0.0.1", "localhost", "::1"):
+        if not self.local_only:
             log.warning(
-                "Desk bound to %s -- this port can place orders and holds "
-                "decrypted credentials. Put authentication in front of it.",
-                self.host,
+                "Desk reachable on %s:%d -- this port can place orders. "
+                "Access requires the token in the printed link.",
+                self.host, self.port,
             )
         log.info("Desk on http://%s:%d", self.host, self.port)
 
@@ -77,7 +150,8 @@ class DeskServer:
 
         try:
             head = request.decode("latin-1")
-            method, path, _ = head.split("\r\n", 1)[0].split(" ", 2)
+            method, target, _ = head.split("\r\n", 1)[0].split(" ", 2)
+            path, _, query = target.partition("?")
         except ValueError:
             writer.write(_json({"error": "bad request"}, "400 Bad Request"))
             await writer.drain()
@@ -101,7 +175,24 @@ class DeskServer:
                 break
 
         try:
-            out = await self._route(method, path.split("?")[0], body)
+            if not self._authorised(head, query):
+                out = _response(
+                    "401 Unauthorized",
+                    b"<h1>Desk locked</h1><p>Open the link printed in the "
+                    b"terminal -- it carries the access token.</p>",
+                    "text/html; charset=utf-8",
+                )
+            else:
+                out = await self._route(method, path, body)
+                # First authorised load carries the token in the query; store
+                # it so a reload or a home-screen launch works without it.
+                if self.token and f"t={self.token}" in query and method == "GET":
+                    out = _response(
+                        "200 OK", out.split(b"\r\n\r\n", 1)[1],
+                        "text/html; charset=utf-8" if path in ("/", "/index.html")
+                        else "application/json",
+                        set_token=self.token,
+                    )
         except Exception as exc:  # noqa: BLE001 - never take the desk down
             log.exception("Desk request failed")
             out = _json({"error": str(exc)[:200]}, "500 Internal Server Error")

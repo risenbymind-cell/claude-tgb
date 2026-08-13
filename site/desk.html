@@ -2,7 +2,13 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#eff1f4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0c1116" media="(prefers-color-scheme: dark)">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Desk">
 <title>Desk · DirectionalBot</title>
 <style>
 /* Same design language as the rest of the project: monospace as the display
@@ -101,6 +107,84 @@ tr.hot{background:var(--accent-soft)}
 .empty{padding:26px;text-align:center;color:var(--ink-3)}
 footer{margin:34px 0 50px;color:var(--ink-3);font-size:12px}
 footer p{max-width:80ch}
+
+/* ---------------- phone ----------------
+   Below 760px the tables become cards. A 900px-wide table on a 390px screen
+   is not a layout problem, it is an unusable page: the columns that matter
+   (net, side, extension) end up off-screen behind a horizontal scroll nobody
+   discovers. Each row becomes a block with its own labels instead. */
+/* Supplies, on a phone, the column name the hidden header no longer gives.
+   Invisible on desktop where the header row does that job. */
+.card-label{display:none}
+
+@media (max-width: 760px){
+  body{font-size:15px}
+  .wrap{padding:0 14px}
+  .bar{padding:10px 14px;gap:8px}
+  .chip{padding:5px 7px;font-size:9px}
+
+  /* Controls stack, and every control is thumb-sized. */
+  .controls{gap:12px;padding:12px}
+  .ctl{flex:1 1 calc(50% - 6px);min-width:0}
+  select,input[type=number]{width:100%;font-size:16px;padding:11px 10px}
+  button{flex:1 1 100%;padding:13px 16px;font-size:15px}
+  #kill,#resume{flex:1 1 calc(50% - 6px)}
+
+  .stats{grid-template-columns:repeat(3,1fr)}
+  .stat{padding:10px 11px}
+  .stat .v{font-size:17px}
+
+  /* Table -> cards. */
+  .tablewrap{border:0;background:transparent;overflow:visible}
+  table{min-width:0;width:100%;display:block}
+  thead{display:none}
+  tbody{display:block}
+  tr{
+    display:grid;grid-template-columns:1fr 1fr;gap:2px 10px;
+    background:var(--surface);border:1px solid var(--rule);border-radius:10px;
+    padding:11px 13px;margin-bottom:9px;
+  }
+  tr.hot{border-color:var(--accent)}
+  td{
+    display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+    border:0;padding:2px 0;white-space:normal;font-size:13px;
+  }
+  td.num{text-align:right;justify-content:space-between}
+  /* The label the header row used to supply. */
+  .card-label{
+    display:inline;font:500 9px/1 var(--mono);letter-spacing:.11em;
+    text-transform:uppercase;color:var(--ink-3);
+  }
+  /* Coin and the money column get the full width and more weight. */
+  td[data-k="coin"],td[data-k="net"],td[data-k="signals"],td[data-k="why"]{
+    grid-column:1 / -1;
+  }
+  td[data-k="coin"]{
+    font-size:16px;border-bottom:1px solid var(--rule-soft);
+    padding-bottom:7px;margin-bottom:4px;
+  }
+  /* The coin cell already carries the countdown and the side, so the
+     dedicated columns for those would only repeat them. */
+  td[data-k="closes"],td[data-k="side"]{display:none}
+  td[data-k="net"]{font-size:16px}
+  .bar-fill{bottom:0}
+  footer{font-size:12px}
+}
+
+@media (max-width: 400px){
+  .stats{grid-template-columns:repeat(2,1fr)}
+  tr{grid-template-columns:1fr}
+}
+
+/* Home-screen launch: keep content clear of the notch and the home bar. */
+@supports (padding: max(0px)){
+  body{
+    padding-left:env(safe-area-inset-left);
+    padding-right:env(safe-area-inset-right);
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  header{padding-top:env(safe-area-inset-top)}
+}
 </style>
 </head>
 <body>
@@ -255,36 +339,38 @@ function render(s) {
       `<span class="sig">${x.strategy}:${x.side.toUpperCase()} ${(x.confidence*100).toFixed(0)}%</span>`
     ).join(" · ");
     return `<tr class="${m.signals.length ? "hot" : ""}">
-      <td class="mono"><b>${m.coin}</b></td>
-      <td class="num">${clock(m.seconds_to_close)}</td>
-      <td class="num">${dc(m.mid_dc)}</td>
-      <td class="num">${dc(m.spread_dc)}</td>
-      <td class="num">${m.depth.toLocaleString()}</td>
-      <td class="num">${dc(m.vwap_dc)}</td>
-      <td class="num">${dc(m.range_dc)}</td>
-      <td class="num bar-cell">${ext === null ? "—" : (ext > 0 ? "+" : "") + ext.toFixed(2)}
+      <td data-k="coin" class="mono"><b>${m.coin}</b><span class="card-label">${clock(m.seconds_to_close)} left</span></td>
+      <td data-k="closes" class="num"><span class="card-label">Closes</span>${clock(m.seconds_to_close)}</td>
+      <td data-k="mid" class="num"><span class="card-label">Mid</span>${dc(m.mid_dc)}</td>
+      <td data-k="spread" class="num"><span class="card-label">Spread</span>${dc(m.spread_dc)}</td>
+      <td data-k="depth" class="num"><span class="card-label">Depth</span>${m.depth.toLocaleString()}</td>
+      <td data-k="vwap" class="num"><span class="card-label">VWAP</span>${dc(m.vwap_dc)}</td>
+      <td data-k="range" class="num"><span class="card-label">Range</span>${dc(m.range_dc)}</td>
+      <td data-k="ext" class="num bar-cell"><span class="card-label">Extension</span>${ext === null ? "—" : (ext > 0 ? "+" : "") + ext.toFixed(2)}
         <span class="bar-fill" style="width:${pct}%"></span></td>
-      <td class="num">${m.velocity_dc === null ? "—" : m.velocity_dc.toFixed(0)}</td>
-      <td class="num ${m.book_age_s > 8 ? "neg" : "dim"}">${m.book_age_s.toFixed(0)}s</td>
-      <td>${sig || '<span class="dim">—</span>'}</td>
+      <td data-k="vel" class="num"><span class="card-label">Velocity</span>${m.velocity_dc === null ? "—" : m.velocity_dc.toFixed(0)}</td>
+      <td data-k="age" class="num ${m.book_age_s > 8 ? "neg" : "dim"}"><span class="card-label">Book age</span>${m.book_age_s.toFixed(0)}s</td>
+      <td data-k="signals"><span class="card-label">Signals</span>${sig || '<span class="dim">none</span>'}</td>
     </tr>`;
   }).join("");
 
   $("trades-empty").hidden = s.positions.length > 0;
   $("trades").innerHTML = s.positions.map((t) => `
     <tr>
-      <td class="mono"><b>${t.coin}</b></td>
-      <td><span class="side ${t.side}">${t.side.toUpperCase()}</span></td>
-      <td class="num">${t.count}</td>
-      <td class="num">${dc(t.entry_dc)}</td>
-      <td class="num">${dc(t.target_dc)}</td>
-      <td class="num">${t.exit_dc === null ? "—" : dc(t.exit_dc)}</td>
-      <td class="num neg">${money(-t.fees_dc)}</td>
-      <td class="num ${t.net_dc >= 0 ? "pos" : "neg"}">
+      <td data-k="coin" class="mono"><b>${t.coin}</b>
+        <span class="side ${t.side}">${t.side.toUpperCase()}</span></td>
+      <td data-k="side" class="num"><span class="card-label">Side</span>
+        <span class="side ${t.side}">${t.side.toUpperCase()}</span></td>
+      <td data-k="size" class="num"><span class="card-label">Size</span>${t.count}</td>
+      <td data-k="entry" class="num"><span class="card-label">Entry</span>${dc(t.entry_dc)}</td>
+      <td data-k="target" class="num"><span class="card-label">Target</span>${dc(t.target_dc)}</td>
+      <td data-k="exit" class="num"><span class="card-label">Exit</span>${t.exit_dc === null ? "—" : dc(t.exit_dc)}</td>
+      <td data-k="fees" class="num neg"><span class="card-label">Fees</span>${money(-t.fees_dc)}</td>
+      <td data-k="net" class="num ${t.net_dc >= 0 ? "pos" : "neg"}"><span class="card-label">Net</span>
         ${t.outcome === "open" ? "—" : "<b>" + money(t.net_dc) + "</b>"}</td>
-      <td class="num dim">${t.age_s}s</td>
-      <td class="${t.outcome === "open" ? "dim" : ""}">${t.outcome}</td>
-      <td class="dim">${t.reason}</td>
+      <td data-k="age" class="num dim"><span class="card-label">Age</span>${t.age_s}s</td>
+      <td data-k="outcome" class="${t.outcome === "open" ? "dim" : ""}"><span class="card-label">Outcome</span>${t.outcome}</td>
+      <td data-k="why" class="dim"><span class="card-label">Why</span>${t.reason}</td>
     </tr>`).join("");
 }
 
