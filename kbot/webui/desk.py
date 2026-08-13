@@ -73,6 +73,13 @@ class MarketView:
     extension: float | None
     velocity_dc: float | None
     book_age_s: float
+    #: (seconds_to_close, mid_dc, vwap_dc) sampled across the window, for the
+    #: chart. Held here rather than recomputed in the browser so the line the
+    #: operator sees is the same series the strategy was evaluated against.
+    history: list[tuple[float, float, float | None]] = field(default_factory=list)
+    #: Top of book both sides, for the depth ladder: [(price_dc, size), ...]
+    yes_levels: list[tuple[int, float]] = field(default_factory=list)
+    no_levels: list[tuple[int, float]] = field(default_factory=list)
     signals: list[dict] = field(default_factory=list)
 
 
@@ -114,6 +121,11 @@ class Desk:
         #: window every pass.
         self._taken: set[tuple[str, str]] = set()
         self._task: asyncio.Task | None = None
+        #: ticker -> (open_time, [(seconds_to_close, mid, vwap)])
+        #: Reset when the window rolls, because a chart spanning two contracts
+        #: is two different markets drawn as one line.
+        self._series: dict[str, tuple[float, list[tuple[float, float, float | None]]]] = {}
+        self._last_sample: dict[str, float] = {}
 
     # ---------------- lifecycle ----------------
 
@@ -153,7 +165,11 @@ class Desk:
             self.last_refresh = now
 
         live = self.discovery.markets
-        self.session.prune({m.ticker for m in live.values()})
+        alive = {m.ticker for m in live.values()}
+        self.session.prune(alive)
+        for gone in [t for t in self._series if t not in alive]:
+            del self._series[gone]
+            self._last_sample.pop(gone, None)
 
         views: dict[str, MarketView] = {}
         for coin, market in live.items():
@@ -169,6 +185,24 @@ class Desk:
                     book.depth("yes") + book.depth("no"),
                     market.open_time, now,
                 )
+
+            # One point every couple of seconds is plenty for a 15-minute
+            # window and keeps the payload small enough to poll each second.
+            if mid is not None and now - self._last_sample.get(market.ticker, 0) >= 2.0:
+                self._last_sample[market.ticker] = now
+                open_time, points = self._series.get(market.ticker, (None, []))
+                if open_time != market.open_time:
+                    points = []
+                points.append(
+                    (
+                        market.seconds_to_close(),
+                        float(mid),
+                        self.session.vwap(market.ticker),
+                    )
+                )
+                # A 15-minute window at one point per 2s is 450 points; the cap
+                # only matters if a market runs long.
+                self._series[market.ticker] = (market.open_time, points[-500:])
 
             view = MarketView(
                 coin=coin,
@@ -187,6 +221,9 @@ class Desk:
                 ),
                 velocity_dc=self.session.velocity_dc(market.ticker, now),
                 book_age_s=book.age(),
+                history=self._series.get(market.ticker, (0.0, []))[1],
+                yes_levels=sorted(book.yes.items(), reverse=True)[:6],
+                no_levels=sorted(book.no.items(), reverse=True)[:6],
             )
 
             ctx = MarketContext(
@@ -323,6 +360,12 @@ class Desk:
                         None if v.velocity_dc is None else round(v.velocity_dc, 1)
                     ),
                     "book_age_s": round(v.book_age_s, 1),
+                    "history": [
+                        [round(s), round(m, 1), None if w is None else round(w, 1)]
+                        for s, m, w in v.history
+                    ],
+                    "yes_levels": [[p, round(q, 1)] for p, q in v.yes_levels],
+                    "no_levels": [[p, round(q, 1)] for p, q in v.no_levels],
                     "signals": v.signals,
                 }
                 for v in sorted(self.markets.values(), key=lambda m: m.coin)

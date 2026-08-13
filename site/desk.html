@@ -90,6 +90,41 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
 .stat .v{font-family:var(--mono);font-size:20px;font-weight:600;letter-spacing:-.03em;
   font-variant-numeric:tabular-nums;margin-top:6px}
 
+/* ---------------- focused market ----------------
+   A trading screen without a chart is a spreadsheet. This is the one panel
+   that shows the window as a shape rather than a number: the mid path, the
+   VWAP it is measured against, and the resting depth on both sides. */
+.panel{background:var(--surface);border:1px solid var(--rule);border-radius:12px;
+  box-shadow:var(--shadow);margin:18px 0}
+.focus{padding:16px 18px 14px}
+.focus-head{display:flex;justify-content:space-between;align-items:flex-start;
+  gap:14px;margin-bottom:12px;flex-wrap:wrap}
+.focus-coin{font-size:22px;font-weight:600;letter-spacing:-.03em}
+.focus-ticker{font-size:11px;letter-spacing:.04em}
+.focus-price{text-align:right}
+.focus-mid{font-size:26px;font-weight:600;letter-spacing:-.04em;
+  font-variant-numeric:tabular-nums;line-height:1.1}
+.focus-sub{font-size:11px;letter-spacing:.06em;margin-top:2px}
+.chart-wrap{position:relative;width:100%}
+canvas{width:100%;height:300px;display:block}
+.legend{display:flex;gap:16px;flex-wrap:wrap;font-size:11.5px;color:var(--ink-2);
+  margin-top:8px;padding-top:10px;border-top:1px solid var(--rule-soft)}
+.sw{display:inline-block;width:14px;height:2px;vertical-align:middle;margin-right:6px}
+.sw.dash{background-image:none;height:0;border-top:2px dashed currentColor}
+
+/* Depth ladder: resting size at each level, both sides, scaled to the largest. */
+.ladder{display:grid;grid-template-columns:1fr 1fr;gap:2px 18px;margin-top:12px}
+.rung{position:relative;display:flex;justify-content:space-between;
+  font-family:var(--mono);font-size:11.5px;font-variant-numeric:tabular-nums;
+  padding:3px 6px;border-radius:3px;overflow:hidden}
+.rung .rb{position:absolute;inset:0 auto 0 0;opacity:.16}
+.rung.yes .rb{background:var(--up)}
+.rung.no .rb{background:var(--down)}
+.rung span{position:relative}
+.rung .qty{color:var(--ink-3)}
+.ladder-head{font:500 9px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-3);padding:0 6px 4px}
+
 .tablewrap{overflow-x:auto;border:1px solid var(--rule);border-radius:10px;background:var(--surface)}
 table{border-collapse:collapse;width:100%;min-width:900px}
 th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--rule-soft);font-size:13px;white-space:nowrap}
@@ -98,6 +133,8 @@ th{font:500 10px/1.3 var(--mono);letter-spacing:.11em;text-transform:uppercase;
 tbody tr:last-child td{border-bottom:0}
 td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
 tr.hot{background:var(--accent-soft)}
+tbody#markets tr{cursor:pointer}
+tbody#markets tr.sel{outline:2px solid var(--accent);outline-offset:-2px}
 .side{font:600 10px/1 var(--mono);letter-spacing:.08em;padding:3px 6px;border-radius:3px}
 .side.yes{color:var(--up);background:color-mix(in srgb,var(--up) 13%,transparent)}
 .side.no{color:var(--down);background:color-mix(in srgb,var(--down) 13%,transparent)}
@@ -133,6 +170,12 @@ footer p{max-width:80ch}
   .stats{grid-template-columns:repeat(3,1fr)}
   .stat{padding:10px 11px}
   .stat .v{font-size:17px}
+
+  .focus{padding:13px 13px 11px}
+  .focus-coin{font-size:19px}
+  .focus-mid{font-size:22px}
+  canvas{height:200px}
+  .legend{font-size:11px;gap:12px}
 
   /* Table -> cards. */
   .tablewrap{border:0;background:transparent;overflow:visible}
@@ -226,6 +269,29 @@ footer p{max-width:80ch}
 
   <div class="stats" id="stats"></div>
 
+  <section class="focus panel" id="focus" hidden>
+    <div class="focus-head">
+      <div>
+        <div class="focus-coin mono" id="f-coin">—</div>
+        <div class="focus-ticker mono dim" id="f-ticker">—</div>
+      </div>
+      <div class="focus-price">
+        <div class="focus-mid mono" id="f-mid">—</div>
+        <div class="focus-sub mono dim" id="f-sub">—</div>
+      </div>
+    </div>
+    <div class="chart-wrap">
+      <canvas id="chart" width="1200" height="300"></canvas>
+    </div>
+    <div class="legend">
+      <span><i class="sw" style="background:var(--ink-2)"></i>Mid</span>
+      <span><i class="sw dash" style="background:var(--accent)"></i>Session VWAP</span>
+      <span><i class="sw" style="background:var(--up)"></i>YES bids</span>
+      <span><i class="sw" style="background:var(--down)"></i>NO bids</span>
+    </div>
+    <div class="ladder" id="ladder"></div>
+  </section>
+
   <h2>Live markets</h2>
   <div class="tablewrap">
     <table>
@@ -276,7 +342,7 @@ const dc = (v) => v === null || v === undefined ? "—" : (v / 10).toFixed(1) + 
 const money = (cents) => (cents < 0 ? "-$" : "$") + (Math.abs(cents) / 1000).toFixed(2);
 const clock = (s) => s == null ? "—" : Math.floor(s / 60) + ":" + String(Math.max(0, s % 60)).padStart(2, "0");
 
-let state = null, dirty = false;
+let state = null, dirty = false, focus = null;
 
 async function api(path, body) {
   const res = await fetch(path, body ? {
@@ -331,6 +397,15 @@ function render(s) {
     + stat("Fees", money(-p.fees_dc), "neg")
     + stat("Net", money(p.net_dc), p.net_dc >= 0 ? "pos" : "neg");
 
+  // Default to whichever market is signalling, else the first. Once the
+  // operator picks one it stays picked -- a panel that jumps as signals
+  // arrive is unreadable.
+  if (!focus || !s.markets.some((m) => m.ticker === focus)) {
+    const signalling = s.markets.find((m) => m.signals.length);
+    focus = (signalling || s.markets[0] || {}).ticker || null;
+  }
+  drawFocus(s.markets.find((m) => m.ticker === focus));
+
   $("markets-empty").hidden = s.markets.length > 0;
   $("markets").innerHTML = s.markets.map((m) => {
     const ext = m.extension;
@@ -338,7 +413,7 @@ function render(s) {
     const sig = m.signals.map((x) =>
       `<span class="sig">${x.strategy}:${x.side.toUpperCase()} ${(x.confidence*100).toFixed(0)}%</span>`
     ).join(" · ");
-    return `<tr class="${m.signals.length ? "hot" : ""}">
+    return `<tr data-ticker="${m.ticker}" class="${m.signals.length ? "hot" : ""}${m.ticker === focus ? " sel" : ""}">
       <td data-k="coin" class="mono"><b>${m.coin}</b><span class="card-label">${clock(m.seconds_to_close)} left</span></td>
       <td data-k="closes" class="num"><span class="card-label">Closes</span>${clock(m.seconds_to_close)}</td>
       <td data-k="mid" class="num"><span class="card-label">Mid</span>${dc(m.mid_dc)}</td>
@@ -353,6 +428,10 @@ function render(s) {
       <td data-k="signals"><span class="card-label">Signals</span>${sig || '<span class="dim">none</span>'}</td>
     </tr>`;
   }).join("");
+
+  for (const row of $("markets").querySelectorAll("tr[data-ticker]")) {
+    row.onclick = () => { focus = row.dataset.ticker; render(state); };
+  }
 
   $("trades-empty").hidden = s.positions.length > 0;
   $("trades").innerHTML = s.positions.map((t) => `
@@ -372,6 +451,123 @@ function render(s) {
       <td data-k="outcome" class="${t.outcome === "open" ? "dim" : ""}"><span class="card-label">Outcome</span>${t.outcome}</td>
       <td data-k="why" class="dim"><span class="card-label">Why</span>${t.reason}</td>
     </tr>`).join("");
+}
+
+/* ------------------------------------------------------------------
+   The chart. Canvas rather than a library: the CSP blocks CDNs, and a
+   line, a dashed line and a few markers do not justify bundling one.
+   Everything drawn comes from the server's own series, so the shape on
+   screen is the shape the strategy was evaluated against.
+   ------------------------------------------------------------------ */
+function drawFocus(m) {
+  const panel = $("focus");
+  if (!m || !m.history || m.history.length < 2) { panel.hidden = true; return; }
+  panel.hidden = false;
+
+  $("f-coin").textContent = m.coin;
+  $("f-ticker").textContent = m.ticker;
+  $("f-mid").textContent = dc(m.mid_dc);
+  const ext = m.extension;
+  $("f-sub").textContent =
+    clock(m.seconds_to_close) + " left · " +
+    (ext === null ? "no extension yet" : (ext > 0 ? "+" : "") + ext.toFixed(2) + "x range");
+  $("f-mid").className = "focus-mid mono " +
+    (ext === null ? "" : ext > 0 ? "pos" : "neg");
+
+  const c = $("chart");
+  // Match the backing store to the CSS box so the line is not blurry on a
+  // phone, where devicePixelRatio is 2 or 3.
+  const dpr = window.devicePixelRatio || 1;
+  const box = c.getBoundingClientRect();
+  if (box.width) {
+    c.width = Math.round(box.width * dpr);
+    c.height = Math.round(box.height * dpr);
+  }
+  const ctx = c.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const W = c.width / dpr, H = c.height / dpr, padL = 40, padR = 10, padY = 14;
+
+  const cs = getComputedStyle(document.documentElement);
+  const col = (n) => cs.getPropertyValue(n).trim();
+  ctx.clearRect(0, 0, W, H);
+
+  const pts = m.history;                       // [secondsLeft, mid, vwap]
+  const mids = pts.map((p) => p[1]);
+  const vw = pts.map((p) => p[2]).filter((v) => v !== null);
+  let lo = Math.min(...mids, ...(vw.length ? vw : mids));
+  let hi = Math.max(...mids, ...(vw.length ? vw : mids));
+  const pad = Math.max(30, (hi - lo) * 0.2);
+  lo -= pad; hi += pad;
+
+  // x is time remaining, so the window runs left (open) to right (close).
+  const t0 = pts[0][0], t1 = pts[pts.length - 1][0];
+  const span = Math.max(1, t0 - t1);
+  const X = (sec) => padL + ((t0 - sec) / span) * (W - padL - padR);
+  const Y = (v) => H - padY - ((v - lo) / (hi - lo)) * (H - padY * 2);
+
+  ctx.strokeStyle = col("--rule-soft"); ctx.lineWidth = 1;
+  ctx.fillStyle = col("--ink-3");
+  ctx.font = "10px " + col("--mono");
+  for (let i = 0; i <= 4; i++) {
+    const v = lo + (hi - lo) * (i / 4), y = Math.round(Y(v)) + 0.5;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+    ctx.fillText((v / 10).toFixed(0) + "c", 4, y + 3);
+  }
+
+  // 50c is where a binary is genuinely undecided; worth its own line.
+  if (lo < 500 && hi > 500) {
+    ctx.strokeStyle = col("--ink-3"); ctx.setLineDash([2, 3]); ctx.globalAlpha = .5;
+    const y = Math.round(Y(500)) + 0.5;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(W - padR, y); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+  }
+
+  // VWAP
+  ctx.strokeStyle = col("--accent"); ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
+  ctx.beginPath(); let started = false;
+  for (const [sec, , v] of pts) {
+    if (v === null) continue;
+    started ? ctx.lineTo(X(sec), Y(v)) : (ctx.moveTo(X(sec), Y(v)), started = true);
+  }
+  ctx.stroke(); ctx.setLineDash([]);
+
+  // Mid, with a soft fill under it.
+  ctx.beginPath();
+  pts.forEach(([sec, v], i) => (i ? ctx.lineTo(X(sec), Y(v)) : ctx.moveTo(X(sec), Y(v))));
+  const grad = ctx.createLinearGradient(0, padY, 0, H - padY);
+  grad.addColorStop(0, col("--accent-soft")); grad.addColorStop(1, "transparent");
+  ctx.save();
+  ctx.lineTo(X(pts[pts.length - 1][0]), H - padY);
+  ctx.lineTo(X(pts[0][0]), H - padY);
+  ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
+  ctx.restore();
+
+  ctx.beginPath();
+  pts.forEach(([sec, v], i) => (i ? ctx.lineTo(X(sec), Y(v)) : ctx.moveTo(X(sec), Y(v))));
+  ctx.strokeStyle = col("--ink"); ctx.lineWidth = 2; ctx.stroke();
+
+  // The live end of the line.
+  const last = pts[pts.length - 1];
+  ctx.fillStyle = col("--accent");
+  ctx.beginPath(); ctx.arc(X(last[0]), Y(last[1]), 3.5, 0, 7); ctx.fill();
+
+  drawLadder(m);
+}
+
+function drawLadder(m) {
+  const rows = (levels, side) => {
+    if (!levels || !levels.length) return "";
+    const max = Math.max(...levels.map((l) => l[1]), 1);
+    return levels.map(([price, qty]) => `
+      <div class="rung ${side}">
+        <span class="rb" style="width:${(qty / max) * 100}%"></span>
+        <span>${(price / 10).toFixed(1)}c</span>
+        <span class="qty">${Math.round(qty).toLocaleString()}</span>
+      </div>`).join("");
+  };
+  $("ladder").innerHTML =
+      `<div><div class="ladder-head">YES bids</div>${rows(m.yes_levels, "yes")}</div>`
+    + `<div><div class="ladder-head">NO bids</div>${rows(m.no_levels, "no")}</div>`;
 }
 
 async function poll() {

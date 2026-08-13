@@ -176,3 +176,45 @@ def test_the_theme_is_declared_for_both_schemes():
     assert PAGE_TEXT.count('name="theme-color"') == 2
     assert "prefers-color-scheme: light" in PAGE_TEXT
     assert "prefers-color-scheme: dark" in PAGE_TEXT
+
+
+# ---------------- the chart ----------------
+
+
+def test_the_desk_has_a_chart():
+    """A trading screen without one is a spreadsheet. It is also the only
+    view that shows a window as a shape rather than a number."""
+    assert '<canvas id="chart"' in PAGE_TEXT
+    assert "function drawFocus" in PAGE_TEXT
+
+
+def test_the_chart_is_drawn_from_the_servers_own_series():
+    """Recomputing it in the browser would let the line on screen diverge
+    from the series the strategy was actually evaluated against."""
+    assert "m.history" in PAGE_TEXT
+    from kbot.webui.desk import MarketView
+
+    assert "history" in MarketView.__dataclass_fields__
+
+
+def test_the_chart_is_sharp_on_a_phone():
+    """Canvas has a backing store separate from its CSS box; ignoring
+    devicePixelRatio gives a blurry line on every modern phone."""
+    assert "devicePixelRatio" in PAGE_TEXT
+
+
+def test_the_series_resets_when_the_window_rolls():
+    """A chart spanning two contracts is two different markets drawn as one
+    line, and the VWAP would be anchored to the wrong one."""
+    import inspect
+
+    from kbot.webui import desk as desk_mod
+
+    src = inspect.getsource(desk_mod.Desk._refresh)
+    assert "open_time != market.open_time" in src
+    assert "points = []" in src
+
+
+def test_the_ladder_shows_both_sides():
+    assert 'id="ladder"' in PAGE_TEXT
+    assert "yes_levels" in PAGE_TEXT and "no_levels" in PAGE_TEXT
