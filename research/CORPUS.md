@@ -54,7 +54,7 @@ Your notes say **8 EMA**. The corpus says **9 EMA**, 129 times. "8 EMA" appears
 **once** in 945,000 words.
 
 ```
-9 EMA   129        200 EMA  120        50 EMA  21
+9 EMA   129        200 EMA  109        50 EMA   21
 8 EMA     1         20 EMA    6         21 EMA   3
 ```
 
@@ -211,7 +211,7 @@ process is better than most:
 
 | Term | Mentions |
 |---|---:|
-| drawdown | 186 |
+| drawdown | 187 |
 | overfit | 62 |
 | slippage | 34 |
 | commission | 15 |
