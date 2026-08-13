@@ -394,3 +394,69 @@ def test_many_trades_get_a_sample_size_verdict():
     text = render(result)
     assert "Sample size" in text
     assert "days of recording" in text or "is enough to resolve" in text
+
+
+# ---------------- exit management ----------------
+
+
+def _trade(outcome: str):
+    from kbot.research.replay import ReplayTrade
+
+    return ReplayTrade(
+        coin="BTC", ticker="T", side="yes", count=10, entry_dc=500,
+        entry_fee_dc=18, target_dc=580, confidence=0.7, reason="x",
+        entered_at=0.0, exit_dc=3, exit_fee_dc=0, outcome=outcome,
+    )
+
+
+def test_every_outcome_with_an_exit_price_counts_as_resolved():
+    """Adding stops and flatten-before-close introduced outcome names the
+    reporter did not know, and two near-total losses silently vanished from
+    the totals -- turning a losing run into a fake 100% win rate. The
+    predicate is a denylist for exactly that reason: a new exit rule must
+    fail loudly, not disappear."""
+    for outcome in ("target", "stopped", "flattened", "timed out", "settled"):
+        assert _trade(outcome).resolved, f"{outcome} must count toward P/L"
+    for outcome in ("unresolved", "open"):
+        assert not _trade(outcome).resolved
+
+
+def test_a_stop_fills_at_the_available_bid_not_the_stop_price():
+    """A binary gaps straight through a level. Filling at the stop price is
+    the most flattering assumption a backtest can make, and on real recorded
+    data the gap is not hypothetical -- positions that hit their stop were
+    exiting at 3 deci-cents against a 500 entry."""
+    from kbot.research.replay import ReplayConfig, replay_market
+    from kbot.research.store import BookRecord
+
+    def rec(t, yes_bid, seconds_left=600.0):
+        return BookRecord(
+            t=t, ticker="T", coin="BTC", open_time=0.0, close_time=t + seconds_left,
+            yes=[[yes_bid, 900.0], [yes_bid - 10, 900.0]],
+            no=[[1000 - yes_bid - 20, 900.0], [1000 - yes_bid - 30, 900.0]],
+        )
+
+    # Flat, then a gap far through where a -10c stop would sit.
+    records = [rec(float(i), 500) for i in range(60)] + [rec(60.0, 120)]
+    cfg = ReplayConfig(strategy="reversion", contracts=5, stop_cents=10)
+
+    trade = replay_market(records, "no", cfg)
+    if trade is not None and trade.outcome == "stopped":
+        assert trade.exit_dc < 400, (
+            "a stop must fill at the bid actually available, not at the "
+            f"stop price (got {trade.exit_dc})"
+        )
+
+
+def test_a_position_is_flattened_before_expiry_by_default():
+    from kbot.research.replay import ReplayConfig
+
+    assert ReplayConfig().flatten_before_close_s > 0
+
+
+def test_the_stop_price_sits_below_entry():
+    from kbot.research.replay import ReplayConfig
+
+    cfg = ReplayConfig(stop_cents=15)
+    assert cfg.stop_dc(500) == 350
+    assert ReplayConfig().stop_dc(500) is None

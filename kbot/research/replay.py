@@ -47,6 +47,32 @@ class ReplayConfig:
     #: Raise a target that would not clear the round-trip fee, as live does.
     enforce_fee_floor: bool = True
 
+    #: Cents below entry at which the position is cut. None means the old
+    #: behaviour: hold to settlement, where a loser costs the entire stake.
+    #:
+    #: This is the single largest term in the expectancy. At a 50c entry with
+    #: a +8c target, holding to expiry needs a 92% win rate to break even --
+    #: which is why the strategy could win 90% of its trades and still lose
+    #: money. A symmetric stop moves that number to the low 70s, and widening
+    #: both legs together moves it toward 55%, because the fee amortises over
+    #: a larger move.
+    stop_cents: int | None = None
+
+    #: Flatten this many seconds before the window closes, whatever the P/L.
+    #: A binary converges hard to 0 or 100 near expiry, so a position carried
+    #: into the last seconds is no longer a scalp -- it is a bet on the
+    #: settlement, at odds nobody chose.
+    flatten_before_close_s: float = 45.0
+
+    #: Give up on a position that has gone nowhere. Capital tied up in a
+    #: market that stopped moving cannot take the next setup.
+    max_hold_s: float | None = None
+
+    def stop_dc(self, entry_dc: int) -> int | None:
+        if self.stop_cents is None:
+            return None
+        return max(1, entry_dc - cents_to_dc(self.stop_cents))
+
     def target_dc(self, entry_dc: int) -> int:
         target = entry_dc + cents_to_dc(self.profit_cents)
         if self.enforce_fee_floor:
@@ -71,7 +97,11 @@ class ReplayTrade:
     exit_dc: int | None = None
     exit_fee_dc: int = 0
     exited_at: float | None = None
-    outcome: str = "open"  # "target" | "settled" | "unresolved" | "open"
+    #: Every way a position can end. Anything with a known exit price is a
+    #: real result and must be counted; only "unresolved" and "open" are not.
+    outcome: str = "open"
+    #: "target" | "stopped" | "flattened" | "timed out" | "settled"
+    #:   | "unresolved" | "open"
 
     @property
     def gross_dc(self) -> int:
@@ -83,9 +113,17 @@ class ReplayTrade:
     def net_dc(self) -> int:
         return self.gross_dc - self.entry_fee_dc - self.exit_fee_dc
 
+    #: Outcomes that produced a real exit price, and therefore a real P/L.
+    #: Defined as a denylist rather than an allowlist on purpose: a new exit
+    #: rule adds a new outcome name, and with an allowlist that outcome
+    #: silently vanishes from every total. That already happened once here --
+    #: adding stops and flatten-before-close made two near-total losses
+    #: disappear and turned a losing run into a fake 100% win rate.
+    UNRESOLVED_OUTCOMES = frozenset({"unresolved", "open"})
+
     @property
     def resolved(self) -> bool:
-        return self.outcome in {"target", "settled"}
+        return self.outcome not in self.UNRESOLVED_OUTCOMES
 
 
 @dataclass
@@ -191,13 +229,42 @@ def replay_market(
             )
             continue
 
-        # Position open: the resting exit fills once a bid reaches the target.
+        # Position open. Three ways out, checked in the order a live engine
+        # would see them.
         bid = book.best_bid(trade.side)
+
+        # 1. The resting exit fills once a bid reaches the target.
         if bid is not None and bid >= trade.target_dc:
             trade.exit_dc = trade.target_dc
             trade.exit_fee_dc = fee_dc(trade.count, trade.target_dc)
             trade.exited_at = rec.t
             trade.outcome = "target"
+            return trade
+
+        # 2. The stop. Filled at the bid actually available, not at the stop
+        # price -- a binary can gap straight through a level, and pretending
+        # otherwise is the most flattering assumption a backtest can make.
+        stop = config.stop_dc(trade.entry_dc)
+        if stop is not None and bid is not None and bid <= stop:
+            trade.exit_dc = bid
+            trade.exit_fee_dc = fee_dc(trade.count, bid) if bid > 0 else 0
+            trade.exited_at = rec.t
+            trade.outcome = "stopped"
+            return trade
+
+        # 3. Time. Either the position has gone nowhere for long enough, or
+        # the window is close enough to expiry that holding is no longer a
+        # scalp but a bet on the settlement.
+        too_old = (
+            config.max_hold_s is not None
+            and rec.t - trade.entered_at >= config.max_hold_s
+        )
+        near_close = rec.seconds_to_close <= config.flatten_before_close_s
+        if (too_old or near_close) and bid is not None:
+            trade.exit_dc = bid
+            trade.exit_fee_dc = fee_dc(trade.count, bid) if bid > 0 else 0
+            trade.exited_at = rec.t
+            trade.outcome = "timed out" if too_old else "flattened"
             return trade
 
     if trade is None:

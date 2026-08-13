@@ -83,6 +83,9 @@ def _config_from(args: argparse.Namespace) -> ReplayConfig:
         min_entry_cents=args.min_entry,
         max_entry_cents=args.max_entry,
         enforce_fee_floor=not args.ignore_fee_floor,
+        stop_cents=getattr(args, "stop", None),
+        flatten_before_close_s=getattr(args, "flatten_before", 45.0),
+        max_hold_s=getattr(args, "max_hold", None),
     )
 
 
@@ -279,6 +282,12 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--coins", help="comma separated")
         p.add_argument("--since", help="YYYY-MM-DD")
         p.add_argument("--until", help="YYYY-MM-DD")
+        p.add_argument("--stop", type=int, default=None,
+                       help="cents below entry to cut the position")
+        p.add_argument("--flatten-before", type=float, default=45.0,
+                       help="seconds before close to flatten regardless")
+        p.add_argument("--max-hold", type=float, default=None,
+                       help="seconds after which a stalled position is closed")
         p.add_argument(
             "--ignore-fee-floor",
             action="store_true",

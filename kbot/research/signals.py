@@ -37,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..kalshi.orderbook import OrderBook
+from ..kalshi.session import SessionStats
 from .replay import book_from_record
 from .store import BookRecord, load_session
 
@@ -141,6 +142,7 @@ def _features(
     book: OrderBook,
     record: BookRecord,
     history: list[tuple[float, float]],
+    session: "SessionStats | None" = None,
 ) -> dict[str, float] | None:
     """Candidate predictors, all sign-oriented so positive means "expect up".
 
@@ -192,6 +194,21 @@ def _features(
         if change is not None:
             feats[label] = change
 
+    # The corpus's central quantity: how far price sits from its own session
+    # consensus, in units of that window's realised range. If this carries no
+    # information, no exit rule built on it can, because fees and exits only
+    # destroy information.
+    if session is not None:
+        extension = session.extension(record.ticker, float(mid))
+        if extension is not None:
+            feats["extension"] = extension
+            # Sign-flipped, so a positive value means "expect up" like every
+            # other feature here -- the hypothesis is that extension reverts.
+            feats["fade_extension"] = -extension
+        velocity = session.velocity_dc(record.ticker, record.t)
+        if velocity is not None:
+            feats["velocity"] = velocity
+
     # Momentum interacted with depth: the case the drift strategy actually
     # trades, where the book and the recent move agree.
     if "drift_20s" in feats:
@@ -240,13 +257,21 @@ def analyse(
 
         mids: list[tuple[float, float]] = []
         computed: list[tuple[float, dict[str, float], float]] = []
+        session = SessionStats()
 
         for record in records:
             book = _book_from(record)
             mid = book.mid
             if mid is None:
                 continue
-            feats = _features(book, record, mids)
+            session.observe(
+                record.ticker,
+                float(mid),
+                book.depth("yes") + book.depth("no"),
+                record.open_time,
+                record.t,
+            )
+            feats = _features(book, record, mids, session)
             mids.append((record.t, float(mid)))
             if feats is not None:
                 computed.append((record.t, feats, float(mid)))

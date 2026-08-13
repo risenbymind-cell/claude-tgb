@@ -67,7 +67,7 @@ def summarise(trades: list[ReplayTrade], label: str) -> Stats:
         worst_dc=min(nets),
         max_drawdown_dc=drawdown,
         target_hits=len([t for t in resolved if t.outcome == "target"]),
-        settled=len([t for t in resolved if t.outcome == "settled"]),
+        settled=len([t for t in resolved if t.outcome != "target"]),
     )
 
 
