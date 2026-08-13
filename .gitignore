@@ -15,3 +15,6 @@ __pycache__/
 .venv/
 venv/
 *.egg-info/
+
+# Recorded market data. Regenerate with `python -m kbot.research record`.
+data/recordings/
