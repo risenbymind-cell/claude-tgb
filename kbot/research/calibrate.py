@@ -123,7 +123,17 @@ def calibration(
     ]
 
 
-def render(rows: list[Bucket], min_observations: int = 5) -> str:
+#: Share of markets settling the same way above which calibration cannot be
+#: measured at all. Well below this a lopsided tape is still a caution; at or
+#: above it the number is meaningless.
+ONE_SIDED_SHARE = 0.75
+
+
+def render(
+    rows: list[Bucket],
+    min_observations: int = 5,
+    outcomes: dict[str, int] | None = None,
+) -> str:
     if not rows:
         return (
             "No settled markets in this recording.\n\n"
@@ -150,6 +160,34 @@ def render(rows: list[Bucket], min_observations: int = 5) -> str:
         )
 
     lines += ["─" * 76, f" {total} settled market(s). * = gap beyond 2 standard errors."]
+
+    # Outcome balance, before anything else. A sample where nearly every market
+    # settled the same way cannot say whether a price band is mispriced -- every
+    # band's "actual" rate is dragged to the same extreme, which reads as a huge
+    # calibration gap and is really one market move counted many times.
+    #
+    # This is not hypothetical: 40 minutes of recording produced 16 "no" against
+    # 2 "yes", and the report announced a 43.8% mean gap as though it were an
+    # edge.
+    if outcomes is not None and sum(outcomes.values()) > 0:
+        n_total = sum(outcomes.values())
+        majority = max(outcomes.values())
+        share = majority / n_total
+        side = max(outcomes, key=outcomes.get)
+        lines.append(
+            f" Outcomes: {outcomes.get('yes', 0)} yes / {outcomes.get('no', 0)} no"
+        )
+        if share >= ONE_SIDED_SHARE:
+            lines += [
+                "",
+                f" ⚠ ONE-SIDED SAMPLE: {majority} of {n_total} markets settled "
+                f"{side.upper()} ({share:.0%}).",
+                "   Calibration cannot be measured from this. Every band's actual",
+                "   rate is pulled to the same extreme, so the gap below describes",
+                "   one directional move counted many times, not a mispricing.",
+                "   Keep recording until both outcomes are well represented.",
+            ]
+            return "\n".join(lines)
 
     solid = [r for r in rows if r.observations >= min_observations]
     if not solid:

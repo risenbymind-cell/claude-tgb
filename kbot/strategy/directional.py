@@ -401,3 +401,141 @@ class ReversionStrategy:
                 "seconds_left": round(ctx.seconds_to_close),
             },
         )
+
+
+class TimedScalpStrategy:
+    """Acts at one chosen point in the window, not whenever a threshold trips.
+
+    Every other strategy here is opportunistic: it watches continuously and
+    fires the moment its condition is met. That means its entries land at
+    whatever time-to-close the market happens to produce, and time-to-close is
+    the single largest determinant of what a 15-minute binary is worth.
+
+    This one inverts that. It has an appointment. At `entry_at_s` before the
+    close -- and only in the seconds around it -- it looks at the window's
+    price path so far and decides one thing: enter, or skip until the next
+    window.
+
+    Why a fixed clock is worth testing at all, measured on recorded books
+    rather than assumed:
+
+        seconds left   mean |mid - outcome|   Brier
+             780-900          48.3c           0.245
+             300-420          20.8c           0.093
+              90-180           8.5c           0.028
+               30-90           2.1c           0.002
+
+    A 15-minute window is not one regime. Early it is close to a coin flip;
+    by ninety seconds out the market has essentially resolved. Any edge lives
+    somewhere on that curve, and a strategy with no clock samples the whole of
+    it indiscriminately -- averaging a regime where the price is uninformative
+    together with one where it is nearly perfect.
+
+    Fixing the entry time makes the position on that curve a *parameter*
+    instead of an accident, which is the only way to find out where, if
+    anywhere, the edge is.
+
+    The direction comes from the path: the window's own range so far, and
+    where the current price sits inside it. `fade_extremes` chooses whether
+    to buy the side the path has run away from (reversion, which is what the
+    transcript corpus argues for) or the side it has run toward.
+
+    NOTHING HERE IS KNOWN TO BE PROFITABLE. The recorded sample is 3 windows
+    and 16 of 18 settled the same way, which is one crypto move counted many
+    times. Sweep `entry_at_s` on 200+ windows before believing any of it.
+    """
+
+    name = "timed"
+    description = "Enters at a fixed point in the window, direction from the path."
+
+    #: Seconds before the close at which the decision is made.
+    ENTRY_AT_S = 300.0
+    #: Half-width of the appointment. Wider than the scan interval so a slow
+    #: tick cannot miss the window entirely.
+    ENTRY_TOLERANCE_S = 15.0
+
+    #: Where in the window's own range the price has to sit to count as
+    #: extended. 0.5 is the midpoint; 0.75 means the top quarter.
+    EXTREME = 0.72
+
+    #: Trade against the extreme rather than with it.
+    FADE_EXTREMES = True
+
+    def __init__(
+        self,
+        entry_at_s: float | None = None,
+        *,
+        extreme: float | None = None,
+        fade: bool | None = None,
+        filters: Filters | None = None,
+    ) -> None:
+        self.entry_at_s = self.ENTRY_AT_S if entry_at_s is None else entry_at_s
+        self.extreme = self.EXTREME if extreme is None else extreme
+        self.fade = self.FADE_EXTREMES if fade is None else fade
+        # min_seconds_left has to admit the appointment itself, or the filter
+        # rejects every entry this strategy exists to take.
+        self.filters = filters or Filters(
+            max_spread=80,
+            min_seconds_left=min(90.0, self.entry_at_s - self.ENTRY_TOLERANCE_S),
+            max_seconds_left=900.0,
+        )
+
+    def evaluate(self, ctx: MarketContext) -> Signal | None:
+        if self.filters.reject(ctx):
+            return None
+
+        # The appointment. Outside it there is nothing to do -- and the engine
+        # dedupes one signal per market window, so the first tick inside the
+        # window is the one that counts.
+        if abs(ctx.seconds_to_close - self.entry_at_s) > self.ENTRY_TOLERANCE_S:
+            return None
+
+        rng = ctx.session_range_dc
+        vwap = ctx.vwap_dc
+        book = ctx.book
+        mid = book.mid
+        if rng is None or vwap is None or mid is None or rng < 20:
+            return None
+
+        # Where the price sits inside the window's own path, as a fraction.
+        # Derived from VWAP and range rather than stored highs so it uses the
+        # same session state everything else does.
+        position = 0.5 + (mid - vwap) / (2 * rng)
+        position = _clamp(position)
+
+        distance = abs(position - 0.5) * 2  # 0 at the middle, 1 at an extreme
+        if distance < (self.extreme - 0.5) * 2:
+            return None
+
+        high_side = position > 0.5
+        # Fading an extreme high means buying NO.
+        want_yes = (not high_side) if self.fade else high_side
+        side = "yes" if want_yes else "no"
+
+        price_dc = book.yes_ask if side == "yes" else book.no_ask
+        if price_dc is None:
+            return None
+        if not (self.filters.min_price <= price_dc <= self.filters.max_price):
+            return None
+
+        confidence = 0.50 + 0.30 * _clamp(
+            (distance - (self.extreme - 0.5) * 2) / max(1e-9, 1 - (self.extreme - 0.5) * 2)
+        )
+        return Signal(
+            coin=ctx.coin,
+            ticker=ctx.ticker,
+            side=side,
+            confidence=confidence,
+            price_dc=price_dc,
+            reason=(
+                f"{'fade' if self.fade else 'follow'} at "
+                f"T-{self.entry_at_s:.0f}s, {position:.0%} of range"
+            ),
+            detail={
+                "entry_at_s": self.entry_at_s,
+                "seconds_left": round(ctx.seconds_to_close),
+                "position_in_range": round(position, 3),
+                "range_dc": round(rng, 1),
+                "vwap_dc": round(vwap, 1),
+            },
+        )

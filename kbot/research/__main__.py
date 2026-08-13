@@ -255,7 +255,16 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
         buckets=args.buckets,
         sample_at_s=args.at,
     )
-    print(render_calibration(rows))
+    # Outcome balance is computed here rather than inside the renderer: the
+    # renderer receives buckets, which have already lost the per-market
+    # settlement that the balance check needs.
+    from collections import Counter
+
+    from .store import load_session
+
+    _, settled = load_session(args.dir, args.since, args.until)
+    outcomes = Counter(v for v in settled.values() if v in ("yes", "no"))
+    print(render_calibration(rows, outcomes=dict(outcomes)))
     return 0
 
 

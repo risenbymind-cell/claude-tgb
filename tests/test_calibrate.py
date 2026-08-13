@@ -135,3 +135,49 @@ def test_coin_filter(tmp_path):
     writer.close()
     assert calibration(tmp_path, coins=["ETH"]) == []
     assert calibration(tmp_path, coins=["BTC"]) != []
+
+
+# ---------------- one-sided samples ----------------
+
+
+def test_a_one_sided_sample_withholds_every_calibration_verdict():
+    """40 minutes of real recording produced 16 'no' against 2 'yes', and the
+    report announced a 43.8% mean gap as though it were an edge. It was one
+    crypto downtrend counted eighteen times: every band's actual rate is
+    dragged to the same extreme, which is indistinguishable from every band
+    being mispriced."""
+    from kbot.research.calibrate import Bucket, render
+
+    rows = [
+        Bucket(low_dc=i * 200, high_dc=(i + 1) * 200, observations=8,
+               settled_yes=0)
+        for i in range(5)
+    ]
+    text = render(rows, outcomes={"yes": 2, "no": 16})
+    assert "ONE-SIDED SAMPLE" in text
+    assert "Mean absolute gap" not in text, (
+        "a gap computed from a one-sided sample must not be reported at all"
+    )
+
+
+def test_a_balanced_sample_still_reports_normally():
+    from kbot.research.calibrate import Bucket, render
+
+    rows = [
+        Bucket(low_dc=i * 200, high_dc=(i + 1) * 200, observations=8,
+               settled_yes=round(8 * (i * 0.2 + 0.1)))
+        for i in range(5)
+    ]
+    text = render(rows, outcomes={"yes": 9, "no": 9})
+    assert "ONE-SIDED SAMPLE" not in text
+    assert "Mean absolute gap" in text
+
+
+def test_the_balance_check_is_skipped_when_outcomes_are_unknown():
+    """Callers that cannot supply the settlements must still get a report."""
+    from kbot.research.calibrate import Bucket, render
+
+    rows = [
+        Bucket(low_dc=400, high_dc=600, observations=9, settled_yes=4)
+    ]
+    assert "ONE-SIDED" not in render(rows)

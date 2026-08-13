@@ -211,3 +211,85 @@ def test_it_is_registered_and_reachable_by_name():
 
     assert "reversion" in strategy_names()
     assert get_strategy("reversion").name == "reversion"
+
+
+# ---------------- the timed scalp ----------------
+
+
+def timed_ctx(seconds_left, mid, vwap=500.0, rng=200.0, **kw):
+    base = dict(
+        coin="BTC", ticker="T", book=book_at(int(mid)),
+        seconds_to_close=seconds_left, window_seconds=900.0,
+        samples=60, book_age_s=0.0,
+        vwap_dc=vwap, session_range_dc=rng,
+    )
+    base.update(kw)
+    return MarketContext(**base)
+
+
+def test_it_only_fires_inside_its_appointment():
+    """The whole point is that time-to-close is a parameter rather than an
+    accident of when a threshold happened to trip."""
+    from kbot.strategy.directional import TimedScalpStrategy
+
+    s = TimedScalpStrategy(300.0)
+    assert s.evaluate(timed_ctx(300.0, 660)) is not None
+    assert s.evaluate(timed_ctx(600.0, 660)) is None
+    assert s.evaluate(timed_ctx(120.0, 660)) is None
+
+
+def test_the_appointment_has_tolerance_so_a_slow_tick_cannot_miss_it():
+    from kbot.strategy.directional import TimedScalpStrategy
+
+    s = TimedScalpStrategy(300.0)
+    assert s.evaluate(timed_ctx(310.0, 660)) is not None
+    assert s.evaluate(timed_ctx(290.0, 660)) is not None
+
+
+def test_a_price_near_the_middle_of_the_range_is_skipped():
+    from kbot.strategy.directional import TimedScalpStrategy
+
+    assert TimedScalpStrategy(300.0).evaluate(timed_ctx(300.0, 505)) is None
+
+
+def test_fade_and_follow_take_opposite_sides():
+    """Same instant, same path, opposite decision -- so a sweep over this flag
+    is a real comparison rather than two versions of one bias."""
+    from kbot.strategy.directional import TimedScalpStrategy
+
+    ctx_high = timed_ctx(300.0, 680)
+    fade = TimedScalpStrategy(300.0, fade=True).evaluate(ctx_high)
+    follow = TimedScalpStrategy(300.0, fade=False).evaluate(ctx_high)
+    assert fade and follow
+    assert fade.side != follow.side
+    assert fade.side == "no", "fading a high means buying NO"
+
+
+def test_the_entry_time_is_configurable_and_reported():
+    from kbot.strategy.directional import TimedScalpStrategy
+
+    s = TimedScalpStrategy(450.0)
+    sig = s.evaluate(timed_ctx(450.0, 680))
+    assert sig is not None
+    assert sig.detail["entry_at_s"] == 450.0
+    assert "T-450s" in sig.reason
+
+
+def test_its_own_filter_cannot_reject_its_appointment():
+    """A default min_seconds_left larger than the entry time would reject
+    every signal the strategy exists to produce, and it would do so silently."""
+    from kbot.strategy.directional import TimedScalpStrategy
+
+    for at in (120.0, 180.0, 300.0, 600.0):
+        s = TimedScalpStrategy(at)
+        assert s.filters.min_seconds_left <= at
+        assert s.evaluate(timed_ctx(at, 690)) is not None, f"rejected at T-{at}"
+
+
+def test_missing_session_state_produces_nothing():
+    from kbot.strategy.directional import TimedScalpStrategy
+
+    s = TimedScalpStrategy(300.0)
+    assert s.evaluate(timed_ctx(300.0, 680, vwap=None)) is None
+    assert s.evaluate(timed_ctx(300.0, 680, rng=None)) is None
+    assert s.evaluate(timed_ctx(300.0, 680, rng=5.0)) is None

@@ -5,6 +5,7 @@ from .directional import (
     Filters,
     HammerStrategy,
     ReversionStrategy,
+    TimedScalpStrategy,
 )
 
 REGISTRY: dict[str, Strategy] = {
@@ -14,6 +15,7 @@ REGISTRY: dict[str, Strategy] = {
         FadeStrategy(),
         HammerStrategy(),
         ReversionStrategy(),
+        TimedScalpStrategy(),
     )
 }
 
