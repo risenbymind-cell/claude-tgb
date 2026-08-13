@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Desk · DirectionalBot</title>
+<style>
+/* Same design language as the rest of the project: monospace as the display
+   face, one amber accent, teal/rose only where the data is binary. */
+:root{
+  --paper:#eff1f4;--surface:#fff;--surface-2:#e7eaee;
+  --ink:#10161f;--ink-2:#515c6b;--ink-3:#7d8899;
+  --rule:#d5dae1;--rule-soft:#e2e6eb;
+  --accent:#b4610a;--accent-soft:rgba(180,97,10,.10);--on-accent:#fff;
+  --up:#0f766e;--down:#a6353f;--warn:#a15c00;
+  --shadow:0 1px 2px rgba(16,22,31,.05),0 8px 24px rgba(16,22,31,.05);
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,"Cascadia Mono","Roboto Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#0c1116;--surface:#141b23;--surface-2:#1a222c;
+  --ink:#e6eaf0;--ink-2:#94a1b2;--ink-3:#6b7889;
+  --rule:#232d38;--rule-soft:#1b232c;
+  --accent:#e8a13a;--accent-soft:rgba(232,161,58,.12);--on-accent:#0c1116;
+  --up:#3fbfa8;--down:#e0707c;--warn:#e8a13a;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.3);
+}}
+:root[data-theme="dark"]{
+  --paper:#0c1116;--surface:#141b23;--surface-2:#1a222c;
+  --ink:#e6eaf0;--ink-2:#94a1b2;--ink-3:#6b7889;
+  --rule:#232d38;--rule-soft:#1b232c;
+  --accent:#e8a13a;--accent-soft:rgba(232,161,58,.12);--on-accent:#0c1116;
+  --up:#3fbfa8;--down:#e0707c;--warn:#e8a13a;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 8px 24px rgba(0,0,0,.3);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+  font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1320px;margin:0 auto;padding:0 20px}
+h1,h2{margin:0;font-family:var(--mono);letter-spacing:-.02em}
+h1{font-size:15px;font-weight:600;text-transform:uppercase}
+h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;
+  color:var(--ink-3);margin:26px 0 10px}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+.pos{color:var(--up)}.neg{color:var(--down)}.dim{color:var(--ink-3)}
+
+header{border-bottom:1px solid var(--rule);background:var(--surface);position:sticky;top:0;z-index:20}
+.bar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:12px 20px;max-width:1320px;margin:0 auto}
+.brand{font:600 14px/1 var(--mono);text-transform:uppercase;margin-right:auto}
+.brand .dot{color:var(--accent)}
+.chip{font:500 10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;
+  border:1px solid var(--rule);border-radius:4px;padding:6px 9px;color:var(--ink-2);white-space:nowrap}
+.chip.on{border-color:var(--accent);color:var(--accent)}
+.chip.hot{border-color:var(--down);color:var(--down)}
+.chip.live{border-color:var(--up);color:var(--up)}
+
+.banner{padding:11px 0;font-size:13px;border-bottom:1px solid var(--rule)}
+.banner.paper{background:var(--accent-soft)}
+.banner.real{background:color-mix(in srgb,var(--down) 14%,transparent)}
+.banner b{font-family:var(--mono);text-transform:uppercase;font-size:11px;letter-spacing:.1em}
+
+.controls{display:flex;gap:16px;align-items:flex-end;flex-wrap:wrap;
+  background:var(--surface);border:1px solid var(--rule);border-radius:10px;
+  padding:14px 16px;margin:18px 0;box-shadow:var(--shadow)}
+.ctl{display:flex;flex-direction:column;gap:6px}
+.ctl label{font:500 10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+select,input[type=number]{font:500 13px var(--sans);padding:7px 9px;border-radius:6px;
+  border:1px solid var(--rule);background:var(--paper);color:var(--ink)}
+input[type=number]{width:82px}
+button{font:600 13px var(--sans);padding:9px 16px;border-radius:6px;cursor:pointer;
+  border:1px solid transparent;background:var(--ink);color:var(--paper)}
+button:hover{background:var(--accent);color:var(--on-accent)}
+button.ghost{background:transparent;border-color:var(--rule);color:var(--ink)}
+button.danger{background:var(--down);color:#fff}
+button:disabled{opacity:.45;cursor:not-allowed}
+button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.stats{display:grid;grid-template-columns:repeat(6,1fr);gap:1px;background:var(--rule);
+  border:1px solid var(--rule);border-radius:10px;overflow:hidden}
+@media(max-width:900px){.stats{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:540px){.stats{grid-template-columns:repeat(2,1fr)}}
+.stat{background:var(--surface);padding:13px 14px}
+.stat .k{font:500 10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
+.stat .v{font-family:var(--mono);font-size:20px;font-weight:600;letter-spacing:-.03em;
+  font-variant-numeric:tabular-nums;margin-top:6px}
+
+.tablewrap{overflow-x:auto;border:1px solid var(--rule);border-radius:10px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;min-width:900px}
+th,td{padding:9px 12px;text-align:left;border-bottom:1px solid var(--rule-soft);font-size:13px;white-space:nowrap}
+th{font:500 10px/1.3 var(--mono);letter-spacing:.11em;text-transform:uppercase;
+  color:var(--ink-3);background:var(--surface-2);position:sticky;top:0}
+tbody tr:last-child td{border-bottom:0}
+td.num{font-family:var(--mono);font-variant-numeric:tabular-nums;text-align:right}
+tr.hot{background:var(--accent-soft)}
+.side{font:600 10px/1 var(--mono);letter-spacing:.08em;padding:3px 6px;border-radius:3px}
+.side.yes{color:var(--up);background:color-mix(in srgb,var(--up) 13%,transparent)}
+.side.no{color:var(--down);background:color-mix(in srgb,var(--down) 13%,transparent)}
+.sig{font:500 11px var(--mono);color:var(--accent)}
+.bar-cell{position:relative;min-width:110px}
+.bar-fill{position:absolute;inset:auto 0 3px 0;height:3px;border-radius:2px;background:var(--accent);opacity:.5}
+.empty{padding:26px;text-align:center;color:var(--ink-3)}
+footer{margin:34px 0 50px;color:var(--ink-3);font-size:12px}
+footer p{max-width:80ch}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <span class="brand">Directional<span class="dot">.</span>desk</span>
+    <span class="chip" id="c-mode">—</span>
+    <span class="chip" id="c-feed">—</span>
+    <span class="chip" id="c-kill">—</span>
+    <span class="chip" id="c-conn">connecting…</span>
+  </div>
+</header>
+
+<div class="banner paper" id="banner">
+  <div class="wrap" id="banner-text">Loading…</div>
+</div>
+
+<div class="wrap">
+
+  <div class="controls">
+    <div class="ctl">
+      <label for="strategy">Strategy</label>
+      <select id="strategy"></select>
+    </div>
+    <div class="ctl">
+      <label for="size">Contracts</label>
+      <input type="number" id="size" min="1" max="500" value="10">
+    </div>
+    <div class="ctl">
+      <label for="target">Target (c)</label>
+      <input type="number" id="target" min="1" max="90" value="15">
+    </div>
+    <button id="toggle">Start trading</button>
+    <button class="ghost" id="reset">Clear trades</button>
+    <button class="danger" id="kill">Kill</button>
+    <button class="ghost" id="resume" hidden>Resume</button>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <h2>Live markets</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th>Coin</th><th class="num">Closes</th><th class="num">Mid</th>
+        <th class="num">Spread</th><th class="num">Depth</th>
+        <th class="num">VWAP</th><th class="num">Range</th>
+        <th>Extension</th><th class="num">Vel</th><th class="num">Age</th>
+        <th>Signals</th>
+      </tr></thead>
+      <tbody id="markets"></tbody>
+    </table>
+  </div>
+  <div class="empty" id="markets-empty" hidden>
+    No live 15-minute markets right now. Kalshi opens a fresh set every quarter hour.
+  </div>
+
+  <h2>Trades</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th>Coin</th><th>Side</th><th class="num">Size</th>
+        <th class="num">Entry</th><th class="num">Target</th><th class="num">Exit</th>
+        <th class="num">Fees</th><th class="num">Net</th>
+        <th class="num">Age</th><th>Outcome</th><th>Why</th>
+      </tr></thead>
+      <tbody id="trades"></tbody>
+    </table>
+  </div>
+  <div class="empty" id="trades-empty">
+    Nothing yet. Most windows produce no setup — that is the filters working.
+  </div>
+
+  <footer>
+    <p><b>Simulated fills.</b> Entries lift the recorded ask capped by resting size;
+    exits fill only when the bid actually reaches the target, and open positions are
+    flattened 45s before expiry rather than carried into a settlement. P&amp;L is net
+    of Kalshi's real fee on both legs.</p>
+    <p>No edge has been demonstrated for any strategy here. Read the net column,
+    not the win rate — small targets can win nine times in ten and still lose money,
+    because the fee is charged twice.</p>
+  </footer>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const dc = (v) => v === null || v === undefined ? "—" : (v / 10).toFixed(1) + "c";
+const money = (cents) => (cents < 0 ? "-$" : "$") + (Math.abs(cents) / 1000).toFixed(2);
+const clock = (s) => s == null ? "—" : Math.floor(s / 60) + ":" + String(Math.max(0, s % 60)).padStart(2, "0");
+
+let state = null, dirty = false;
+
+async function api(path, body) {
+  const res = await fetch(path, body ? {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  } : {});
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({error: res.statusText}));
+    throw new Error(err.error || res.statusText);
+  }
+  return res.json();
+}
+
+function render(s) {
+  state = s;
+  $("c-conn").textContent = "connected";
+  $("c-conn").className = "chip live";
+  $("c-mode").textContent = s.mode;
+  $("c-mode").className = "chip " + (s.risks_real_money ? "hot" : "on");
+  $("c-feed").textContent = s.feed;
+  $("c-kill").textContent = s.kill.engaged ? "KILLED" : "armed";
+  $("c-kill").className = "chip " + (s.kill.engaged ? "hot" : "");
+
+  const b = $("banner");
+  b.className = "banner " + (s.risks_real_money ? "real" : "paper");
+  $("banner-text").innerHTML = s.kill.engaged
+    ? `<b>Kill switch engaged.</b> ${s.kill.detail}. No orders will be placed.`
+    : `<b>${s.mode_label}</b>`;
+
+  $("resume").hidden = !s.kill.engaged;
+  $("toggle").textContent = s.enabled ? "Stop trading" : "Start trading";
+  $("toggle").disabled = s.kill.engaged;
+
+  if (!dirty) {
+    if ($("strategy").options.length !== s.strategies.length) {
+      $("strategy").innerHTML = s.strategies
+        .map((n) => `<option${n === s.strategy ? " selected" : ""}>${n}</option>`).join("");
+    }
+    $("strategy").value = s.strategy;
+    $("size").value = s.size;
+    $("target").value = s.target_c;
+  }
+
+  const p = s.pnl;
+  const stat = (k, v, cls) =>
+    `<div class="stat"><div class="k">${k}</div><div class="v ${cls || ""}">${v}</div></div>`;
+  $("stats").innerHTML =
+      stat("Markets", s.markets.length)
+    + stat("Open", p.open)
+    + stat("Closed", p.closed)
+    + stat("Win rate", p.win_rate === null ? "—" : (100 * p.win_rate).toFixed(0) + "%")
+    + stat("Fees", money(-p.fees_dc), "neg")
+    + stat("Net", money(p.net_dc), p.net_dc >= 0 ? "pos" : "neg");
+
+  $("markets-empty").hidden = s.markets.length > 0;
+  $("markets").innerHTML = s.markets.map((m) => {
+    const ext = m.extension;
+    const pct = ext === null ? 0 : Math.min(100, Math.abs(ext) * 100);
+    const sig = m.signals.map((x) =>
+      `<span class="sig">${x.strategy}:${x.side.toUpperCase()} ${(x.confidence*100).toFixed(0)}%</span>`
+    ).join(" · ");
+    return `<tr class="${m.signals.length ? "hot" : ""}">
+      <td class="mono"><b>${m.coin}</b></td>
+      <td class="num">${clock(m.seconds_to_close)}</td>
+      <td class="num">${dc(m.mid_dc)}</td>
+      <td class="num">${dc(m.spread_dc)}</td>
+      <td class="num">${m.depth.toLocaleString()}</td>
+      <td class="num">${dc(m.vwap_dc)}</td>
+      <td class="num">${dc(m.range_dc)}</td>
+      <td class="num bar-cell">${ext === null ? "—" : (ext > 0 ? "+" : "") + ext.toFixed(2)}
+        <span class="bar-fill" style="width:${pct}%"></span></td>
+      <td class="num">${m.velocity_dc === null ? "—" : m.velocity_dc.toFixed(0)}</td>
+      <td class="num ${m.book_age_s > 8 ? "neg" : "dim"}">${m.book_age_s.toFixed(0)}s</td>
+      <td>${sig || '<span class="dim">—</span>'}</td>
+    </tr>`;
+  }).join("");
+
+  $("trades-empty").hidden = s.positions.length > 0;
+  $("trades").innerHTML = s.positions.map((t) => `
+    <tr>
+      <td class="mono"><b>${t.coin}</b></td>
+      <td><span class="side ${t.side}">${t.side.toUpperCase()}</span></td>
+      <td class="num">${t.count}</td>
+      <td class="num">${dc(t.entry_dc)}</td>
+      <td class="num">${dc(t.target_dc)}</td>
+      <td class="num">${t.exit_dc === null ? "—" : dc(t.exit_dc)}</td>
+      <td class="num neg">${money(-t.fees_dc)}</td>
+      <td class="num ${t.net_dc >= 0 ? "pos" : "neg"}">
+        ${t.outcome === "open" ? "—" : "<b>" + money(t.net_dc) + "</b>"}</td>
+      <td class="num dim">${t.age_s}s</td>
+      <td class="${t.outcome === "open" ? "dim" : ""}">${t.outcome}</td>
+      <td class="dim">${t.reason}</td>
+    </tr>`).join("");
+}
+
+async function poll() {
+  try {
+    render(await api("/api/state"));
+  } catch (e) {
+    $("c-conn").textContent = "disconnected";
+    $("c-conn").className = "chip hot";
+  }
+}
+
+$("toggle").onclick = async () => {
+  try { render(await api("/api/trading", {enabled: !state.enabled})); }
+  catch (e) { alert(e.message); }
+};
+$("kill").onclick = async () => render(await api("/api/kill", {reason: "stopped from the desk"}));
+$("resume").onclick = async () => render(await api("/api/resume", {}));
+$("reset").onclick = async () => render(await api("/api/reset", {}));
+$("strategy").onchange = async (e) => {
+  dirty = true;
+  try { render(await api("/api/strategy", {strategy: e.target.value})); }
+  finally { dirty = false; }
+};
+for (const id of ["size", "target"]) {
+  $(id).onchange = async () => {
+    dirty = true;
+    try {
+      render(await api("/api/settings",
+        {size: +$("size").value, target_c: +$("target").value}));
+    } finally { dirty = false; }
+  };
+}
+
+poll();
+setInterval(poll, 1000);
+</script>
+</body>
+</html>

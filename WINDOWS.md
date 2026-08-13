@@ -140,6 +140,39 @@ that's usually just the network.
 
 ---
 
+## 4b — Or skip Telegram entirely: the web desk
+
+If the Telegram bot is giving you trouble, you do not need it. The desk is the
+same engine with a browser interface, served by your own machine:
+
+```powershell
+cd $HOME\claude-tgb
+.venv\Scripts\python -m kbot.webui
+```
+
+Then open **http://127.0.0.1:8787**.
+
+Live Kalshi markets, every strategy evaluated on every market each second,
+paper fills against the real book, and a kill switch. No BotFather, no token,
+no Kalshi account needed to watch it.
+
+Why it has to be served locally rather than being a plain web page: Kalshi
+answers **403 to any request carrying a browser `Origin` header**. A page
+cannot call their API at all. Your browser talks to localhost; this process —
+which sends no Origin — talks to Kalshi.
+
+```powershell
+# point it at Kalshi's demo exchange instead
+.venv\Scripts\python -m kbot.webui --strategy timed --size 5 --target 20
+```
+
+Mode comes from `.env`, so `-Demo` on the runner script applies here too.
+
+> Leave `--host` alone. The desk can place orders and holds decrypted
+> credentials; binding it to anything but localhost puts that on your network.
+
+---
+
 ## 5 — Give yourself access
 
 Open Telegram, find your bot, press **Start**. You'll get a welcome message and
