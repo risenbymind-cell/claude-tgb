@@ -1,0 +1,78 @@
+# Publishes the public site to GitHub Pages.
+#
+# Free, no card, no account beyond the one already hosting this repo -- which
+# is the whole reason this exists rather than a Render or fly.io deploy.
+#
+# What ships is deliberately not everything in site/. The desk is a local
+# application: it polls a Python process on localhost for its data, so a
+# public copy would render a permanently disconnected shell and read as a
+# broken product. A page that cannot work where it is served does not belong
+# on a public site.
+
+name: Publish site
+
+on:
+  push:
+    branches: [main, master, claude/telegram-kalshi-bot-ciy8by]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time. Cancelling a running deploy mid-publish can leave the
+# site serving a half-uploaded artifact.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assemble the public site
+        run: |
+          set -euo pipefail
+          mkdir -p _site
+          cp site/index.html _site/index.html
+          cp site/app.html   _site/app.html
+          cp site/404.html   _site/404.html
+          cp site/robots.txt _site/robots.txt
+          # desk.html needs a local server; data.json is already inlined into
+          # app.html, so shipping it again would only double the payload.
+          echo "Published:"; ls -la _site
+
+      - name: Check nothing secret is going public
+        run: |
+          set -euo pipefail
+          # A landing page is the easiest place to leak a token by accident.
+          if grep -rIEq '[0-9]{6,12}:[A-Za-z0-9_-]{30,}' _site; then
+            echo "::error::A Telegram-token-shaped string is in the public site."
+            exit 1
+          fi
+          if grep -rIq 'BEGIN [A-Z ]*PRIVATE KEY' _site; then
+            echo "::error::A private key is in the public site."
+            exit 1
+          fi
+          echo "No secrets found."
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
