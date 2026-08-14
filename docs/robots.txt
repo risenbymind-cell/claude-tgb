@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# The desk is a local application and is never published here.
+Disallow: /desk.html

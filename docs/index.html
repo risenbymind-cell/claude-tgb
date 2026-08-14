@@ -1,0 +1,823 @@
+<title>DirectionalBot</title>
+<meta name="description" content="A Telegram bot that reads Kalshi's live order book on the 15-minute crypto markets and trades your account, or sends you the signal.">
+<style>
+/* ============================================================
+   DirectionalBot
+   Set your bot's @username once, in the BOT const at the bottom.
+   Every button on the page picks it up.
+
+   Design: monospace as the display face, because the vernacular of
+   this subject -- order books, price ladders, tickers -- is
+   monospaced. One accent (signal amber) spent on live state and the
+   countdown. Teal/rose appear only where data is genuinely binary.
+   ============================================================ */
+
+:root{
+  --paper:#eff1f4;
+  --surface:#ffffff;
+  --surface-2:#e7eaee;
+  --ink:#10161f;
+  --ink-2:#515c6b;
+  --ink-3:#7d8899;
+  --rule:#d5dae1;
+  --rule-soft:#e2e6eb;
+  --accent:#b4610a;
+  --accent-soft:rgba(180,97,10,.10);
+  --up:#0f766e;
+  --down:#a6353f;
+  --shadow:0 1px 2px rgba(16,22,31,.05), 0 8px 24px rgba(16,22,31,.05);
+  /* Text sitting ON the accent. The accent is dark amber in light mode and
+     light amber in dark, so a fixed white here is illegible in one of them. */
+  --on-accent:#ffffff;
+
+  --mono:ui-monospace,"SF Mono",SFMono-Regular,"Cascadia Mono","Roboto Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --maxw:1080px;
+}
+
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#0c1116;
+    --surface:#141b23;
+    --surface-2:#1a222c;
+    --ink:#e6eaf0;
+    --ink-2:#94a1b2;
+    --ink-3:#6b7889;
+    --rule:#232d38;
+    --rule-soft:#1b232c;
+    --accent:#e8a13a;
+    --accent-soft:rgba(232,161,58,.12);
+    --up:#3fbfa8;
+    --down:#e0707c;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+    --on-accent:#0c1116;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0c1116;
+  --surface:#141b23;
+  --surface-2:#1a222c;
+  --ink:#e6eaf0;
+  --ink-2:#94a1b2;
+  --ink-3:#6b7889;
+  --rule:#232d38;
+  --rule-soft:#1b232c;
+  --accent:#e8a13a;
+  --accent-soft:rgba(232,161,58,.12);
+  --up:#3fbfa8;
+  --down:#e0707c;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  --on-accent:#0c1116;
+}
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:var(--sans);
+  font-size:16px;
+  line-height:1.65;
+  -webkit-font-smoothing:antialiased;
+}
+@media (prefers-reduced-motion: reduce){
+  html{scroll-behavior:auto}
+  *{animation-duration:.01ms !important;transition-duration:.01ms !important}
+}
+
+a{color:inherit;text-decoration-color:var(--rule);text-underline-offset:3px}
+a:focus-visible,button:focus-visible,summary:focus-visible{
+  outline:2px solid var(--accent);outline-offset:3px;border-radius:2px;
+}
+
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 28px}
+
+/* ---- the ledger rule + margin label that structures every section ---- */
+.band{border-top:1px solid var(--rule);padding:76px 0}
+.band:first-of-type{border-top:0}
+.label{
+  font:500 11px/1 var(--mono);
+  letter-spacing:.16em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+  margin:0 0 24px;
+}
+.label b{color:var(--accent);font-weight:500}
+
+h1,h2,h3{margin:0;text-wrap:balance}
+h1{
+  font-family:var(--mono);
+  font-size:clamp(30px,5.4vw,58px);
+  line-height:1.02;
+  font-weight:600;
+  letter-spacing:-.035em;
+  text-transform:uppercase;
+}
+h2{
+  font-family:var(--mono);
+  font-size:clamp(22px,3vw,32px);
+  line-height:1.12;
+  font-weight:600;
+  letter-spacing:-.025em;
+  margin-bottom:16px;
+}
+h3{font-size:16px;font-weight:650;letter-spacing:-.01em;margin-bottom:6px}
+p{margin:0 0 16px;max-width:65ch}
+.lede{font-size:clamp(16px,1.7vw,19px);color:var(--ink-2);max-width:60ch}
+.muted{color:var(--ink-2)}
+.small{font-size:14px}
+
+code,.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+code{
+  background:var(--surface-2);padding:.12em .4em;border-radius:3px;
+  font-size:.9em;
+}
+
+/* ---------------- header ---------------- */
+header{
+  position:sticky;top:0;z-index:40;
+  background:color-mix(in srgb, var(--paper) 88%, transparent);
+  backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--rule);
+}
+.navbar{
+  display:flex;align-items:center;gap:24px;
+  padding:14px 28px;max-width:var(--maxw);margin:0 auto;
+}
+.brand{
+  font:600 15px/1 var(--mono);letter-spacing:-.02em;
+  text-transform:uppercase;text-decoration:none;margin-right:auto;
+}
+.brand .dot{color:var(--accent)}
+.navlinks{display:flex;gap:22px}
+.navlinks a{
+  font:500 13px/1 var(--sans);color:var(--ink-2);text-decoration:none;
+}
+.navlinks a:hover{color:var(--ink)}
+@media (max-width:720px){.navlinks{display:none}}
+
+/* ---------------- buttons ---------------- */
+.btn{
+  display:inline-flex;align-items:center;gap:9px;
+  font:600 14px/1 var(--sans);
+  padding:12px 20px;border-radius:6px;
+  text-decoration:none;border:1px solid transparent;
+  transition:transform .12s ease, background .12s ease, border-color .12s ease;
+}
+.btn:active{transform:translateY(1px)}
+.btn-primary{background:var(--ink);color:var(--paper)}
+.btn-primary:hover{background:var(--accent);color:var(--on-accent)}
+.btn-ghost{border-color:var(--rule);color:var(--ink);background:transparent}
+.btn-ghost:hover{border-color:var(--ink-3);background:var(--surface)}
+.btn-row{display:flex;flex-wrap:wrap;gap:12px;margin-top:28px}
+
+/* ---------------- hero ---------------- */
+.hero{padding:84px 0 68px}
+.hero-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:56px;align-items:start}
+@media (max-width:900px){.hero-grid{grid-template-columns:1fr;gap:40px}}
+
+.hero h1 .accent{color:var(--accent)}
+.hero .lede{margin-top:22px}
+
+/* the live window clock -- a real clock, not market data */
+.clock{
+  background:var(--surface);
+  border:1px solid var(--rule);
+  border-radius:10px;
+  padding:22px;
+  box-shadow:var(--shadow);
+}
+.clock-head{
+  display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid var(--rule-soft);padding-bottom:12px;margin-bottom:16px;
+}
+.clock-head span{
+  font:500 10px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
+  color:var(--ink-3);
+}
+.pulse{
+  display:inline-block;width:7px;height:7px;border-radius:50%;
+  background:var(--accent);margin-right:7px;vertical-align:middle;
+  animation:pulse 2.4s ease-in-out infinite;
+}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+.countdown{
+  font-family:var(--mono);font-variant-numeric:tabular-nums;
+  font-size:clamp(38px,7vw,52px);line-height:1;font-weight:600;
+  letter-spacing:-.04em;color:var(--accent);
+}
+.countdown-sub{
+  font:400 13px/1.5 var(--sans);color:var(--ink-2);margin-top:10px;
+}
+.ladder{margin-top:20px;border-top:1px solid var(--rule-soft);padding-top:16px}
+.ladder-title{
+  font:500 10px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
+  color:var(--ink-3);margin-bottom:12px;
+}
+.rung{
+  display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:10px;
+  font-family:var(--mono);font-size:13px;font-variant-numeric:tabular-nums;
+  padding:3px 0;
+}
+.rung .side{font-size:10px;letter-spacing:.1em;width:32px}
+.rung.yes .side{color:var(--up)}
+.rung.no .side{color:var(--down)}
+.bar{height:7px;border-radius:2px;opacity:.28}
+.rung.yes .bar{background:var(--up)}
+.rung.no .bar{background:var(--down)}
+.rung .qty{color:var(--ink-3);font-size:12px}
+
+/* ---------------- generic grid ---------------- */
+.grid{display:grid;gap:1px;background:var(--rule);border:1px solid var(--rule);border-radius:10px;overflow:hidden;margin-top:32px}
+.g2{grid-template-columns:repeat(2,1fr)}
+.g3{grid-template-columns:repeat(3,1fr)}
+@media (max-width:820px){.g3{grid-template-columns:1fr}.g2{grid-template-columns:1fr}}
+.cell{background:var(--surface);padding:24px}
+.cell p{margin:0;color:var(--ink-2);font-size:15px}
+.cell .n{
+  font:500 10px/1 var(--mono);letter-spacing:.16em;color:var(--accent);
+  display:block;margin-bottom:12px;
+}
+
+/* ---------------- mode table ---------------- */
+.tablewrap{overflow-x:auto;margin-top:32px;border:1px solid var(--rule);border-radius:10px}
+table{border-collapse:collapse;width:100%;min-width:620px;background:var(--surface)}
+th,td{
+  text-align:left;padding:14px 18px;border-bottom:1px solid var(--rule-soft);
+  font-size:14px;vertical-align:top;
+}
+thead th{
+  font:500 10px/1.4 var(--mono);letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-3);background:var(--surface-2);
+}
+tbody tr:last-child td{border-bottom:0}
+td.mode{font-family:var(--mono);font-weight:600;white-space:nowrap}
+td.mode small{display:block;font-weight:400;color:var(--ink-3);font-size:11px;letter-spacing:.06em;margin-top:3px}
+.tick{color:var(--up);font-weight:700}
+.cross{color:var(--ink-3)}
+.warn{color:var(--down);font-weight:600}
+
+/* ---------------- coins ---------------- */
+.coins{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px}
+.coin{
+  font:600 12px/1 var(--mono);letter-spacing:.06em;
+  border:1px solid var(--rule);background:var(--surface);
+  padding:9px 13px;border-radius:5px;
+}
+
+/* ---------------- pricing ---------------- */
+.tiers{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:32px}
+@media (max-width:900px){.tiers{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:520px){.tiers{grid-template-columns:1fr}}
+.tier{
+  background:var(--surface);border:1px solid var(--rule);border-radius:10px;
+  padding:22px;display:flex;flex-direction:column;
+}
+.tier.feature{border-color:var(--accent);box-shadow:var(--shadow)}
+.tier-name{
+  font:500 10px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;
+  color:var(--ink-3);margin-bottom:14px;
+}
+.tier.feature .tier-name{color:var(--accent)}
+.price{
+  font-family:var(--mono);font-variant-numeric:tabular-nums;
+  font-size:34px;line-height:1;font-weight:600;letter-spacing:-.04em;
+}
+.price sup{font-size:16px;font-weight:500;vertical-align:super;margin-right:1px}
+.per{font-size:13px;color:var(--ink-3);margin-top:7px}
+.tier .btn{margin-top:auto;justify-content:center}
+.tier ul{list-style:none;padding:0;margin:18px 0;display:flex;flex-direction:column;gap:7px}
+.tier li{font-size:13px;color:var(--ink-2);padding-left:16px;position:relative}
+.tier li::before{content:"";position:absolute;left:0;top:.55em;width:6px;height:1px;background:var(--accent)}
+
+/* ---------------- honesty callout ---------------- */
+.callout{
+  border:1px solid var(--accent);
+  background:var(--accent-soft);
+  border-radius:10px;padding:26px 28px;margin-top:8px;
+}
+.callout h2{margin-bottom:12px}
+.callout p{color:var(--ink)}
+.callout p:last-child{margin-bottom:0}
+
+/* ---------------- faq ---------------- */
+details{border-bottom:1px solid var(--rule-soft);padding:4px 0}
+summary{
+  cursor:pointer;list-style:none;padding:16px 0;
+  font-weight:600;font-size:15px;display:flex;gap:14px;align-items:flex-start;
+}
+summary::-webkit-details-marker{display:none}
+summary::before{
+  content:"+";font-family:var(--mono);color:var(--accent);
+  font-weight:600;flex-shrink:0;line-height:1.5;
+}
+details[open] summary::before{content:"\2212"}
+details p{padding-left:28px;color:var(--ink-2);font-size:15px}
+
+/* ---------------- footer ---------------- */
+footer{border-top:1px solid var(--rule);padding:44px 0 60px;font-size:13px;color:var(--ink-3)}
+footer p{max-width:75ch;font-size:13px}
+.risk{
+  border-left:2px solid var(--down);padding-left:16px;margin-bottom:26px;
+  color:var(--ink-2);
+}
+</style>
+
+<header>
+  <nav class="navbar">
+    <a class="brand" href="#top">Directional<span class="dot">.</span>bot</a>
+    <div class="navlinks">
+      <a href="#how">How it works</a>
+      <a href="#modes">Modes</a>
+      <a href="#control">Your rules</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#faq">FAQ</a>
+      <a href="/app.html">Simulator</a>
+    </div>
+    <a class="btn btn-primary" href="#" data-bot-link="">Open in Telegram</a>
+  </nav>
+</header>
+
+<main id="top">
+
+<!-- ============ HERO ============ -->
+<section class="band hero">
+  <div class="wrap hero-grid">
+    <div>
+      <p class="label"><b>Kalshi</b> &nbsp;/&nbsp; 15-minute crypto markets</p>
+      <h1>Fifteen minutes.<br>Up or <span class="accent">down</span>.<br>Nothing else.</h1>
+      <p class="lede">
+        A Telegram bot that reads the live Kalshi order book on the 15-minute
+        crypto markets, and either places the trade on your account or sends you
+        the signal to take yourself.
+      </p>
+      <div class="btn-row">
+        <a class="btn btn-primary" href="#" data-bot-link="">Open in Telegram</a>
+        <a class="btn btn-ghost" href="#how">See how it works</a>
+      </div>
+      <p class="small muted" style="margin-top:20px">
+        Starts in paper mode. No Kalshi account needed to watch it trade.
+      </p>
+    </div>
+
+    <aside class="clock">
+      <div class="clock-head">
+        <span><span class="pulse"></span>Next window</span>
+        <span id="window-label">--:--</span>
+      </div>
+      <div class="countdown mono" id="countdown">--:--</div>
+      <p class="countdown-sub">
+        Kalshi opens a fresh up/down market every quarter hour. At the close it
+        settles at exactly $1.00 or $0.00 — there is no in-between.
+      </p>
+
+      <div class="ladder">
+        <p class="ladder-title">What the bot reads &mdash; illustrative</p>
+        <div class="rung no"><span class="side">NO</span><span class="bar" style="width:38%"></span><span class="qty">412</span></div>
+        <div class="rung no"><span class="side">NO</span><span class="bar" style="width:22%"></span><span class="qty">237</span></div>
+        <div class="rung yes"><span class="side">YES</span><span class="bar" style="width:71%"></span><span class="qty">1,204</span></div>
+        <div class="rung yes"><span class="side">YES</span><span class="bar" style="width:54%"></span><span class="qty">903</span></div>
+        <p class="small" style="color:var(--ink-3);margin:12px 0 0;font-size:12px">
+          A diagram of book imbalance, not a live quote.
+        </p>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<!-- ============ HOW ============ -->
+<section class="band" id="how">
+  <div class="wrap">
+    <p class="label">How it works</p>
+    <h2>It watches the book, not the chart.</h2>
+    <p class="lede">
+      Every second, for every market you've enabled, it pulls the full order book
+      and measures where the resting size actually sits.
+    </p>
+
+    <div class="grid g3">
+      <div class="cell">
+        <span class="n">Reads</span>
+        <h3>The live order book</h3>
+        <p>Depth on both sides, the spread, and how fair value has moved over the
+        last few seconds — the things that move before the price does.</p>
+      </div>
+      <div class="cell">
+        <span class="n">Filters</span>
+        <h3>Most windows, out</h3>
+        <p>Wide spreads, thin books, the first and last minutes of a window, and
+        setups where the signal components disagree are all skipped. Doing
+        nothing is the common case.</p>
+      </div>
+      <div class="cell">
+        <span class="n">Executes</span>
+        <h3>Entry through exit</h3>
+        <p>A sell order goes in the moment an entry fills. If neither side fills,
+        the window settles and the result is booked — net of fees, both ways.</p>
+      </div>
+    </div>
+
+    <p class="small muted" style="margin-top:24px">
+      Kalshi charges a fee on entry <em>and</em> exit — around 4&cent; of
+      round-trip movement near mid-book. Exit targets below that floor are raised
+      automatically rather than booked as losing &ldquo;wins&rdquo;.
+    </p>
+  </div>
+</section>
+
+<!-- ============ MODES ============ -->
+<section class="band" id="modes">
+  <div class="wrap">
+    <p class="label">Modes</p>
+    <h2>Three modes. You cannot reach the third by accident.</h2>
+    <p class="lede">
+      Paper is the default and needs no Kalshi account at all. Real orders take a
+      deliberate change; real money takes two.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Mode</th>
+            <th>Orders sent</th>
+            <th>Order book used</th>
+            <th>At stake</th>
+            <th>Answers</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="mode">PAPER<small>default</small></td>
+            <td><span class="cross">None</span></td>
+            <td>Production</td>
+            <td><span class="cross">Nothing</span></td>
+            <td>Is the strategy any good?</td>
+          </tr>
+          <tr>
+            <td class="mode">DEMO-LIVE</td>
+            <td><span class="tick">Real API calls</span></td>
+            <td>Kalshi demo</td>
+            <td>Demo funds</td>
+            <td>Does the order code work?</td>
+          </tr>
+          <tr>
+            <td class="mode">PRODUCTION-LIVE</td>
+            <td><span class="tick">Real API calls</span></td>
+            <td>Production</td>
+            <td><span class="warn">Your own money</span></td>
+            <td>&mdash;</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="grid g2">
+      <div class="cell">
+        <h3>Paper trades the real book</h3>
+        <p>It simulates fills against production liquidity, not the demo book —
+        so what you measure in paper is measured against depth that genuinely
+        exists. That is the only reason paper results mean anything.</p>
+      </div>
+      <div class="cell">
+        <h3>Demo proves the plumbing, not the edge</h3>
+        <p>Signing, fills, partial fills, rejects, rate limits — all real. But
+        the demo book is thin, so its profit and loss is not evidence about the
+        strategy and is never presented as though it were.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CONTROL ============ -->
+<section class="band" id="control">
+  <div class="wrap">
+    <p class="label">Your rules</p>
+    <h2>Your account. Your key. Your caps.</h2>
+
+    <div class="grid g3">
+      <div class="cell">
+        <span class="n">Auto</span>
+        <h3>Auto-execute</h3>
+        <p>The order goes in the moment a signal fires, sized to your settings.</p>
+      </div>
+      <div class="cell">
+        <span class="n">Manual</span>
+        <h3>Signals only</h3>
+        <p>Every setup arrives with its confidence read and price. You place it
+        yourself, or ignore it.</p>
+      </div>
+      <div class="cell">
+        <span class="n">Exit</span>
+        <h3>Smart cash-out</h3>
+        <p>A resting sell at a fixed number of cents above entry, or an absolute
+        target price. Your choice, per account.</p>
+      </div>
+      <div class="cell">
+        <span class="n">Caps</span>
+        <h3>Risk limits that persist</h3>
+        <p>Daily loss limit, maximum open exposure, a balance floor it won't
+        spend below, contracts per signal, trades per window. Checked against
+        your ledger, so a restart doesn't reset them.</p>
+      </div>
+      <div class="cell">
+        <span class="n">Stop</span>
+        <h3>A kill switch that works</h3>
+        <p><code>/kill</code> stops every order immediately and survives a
+        restart. No confirmation step — it works first press.</p>
+      </div>
+      <div class="cell">
+        <span class="n">Keys</span>
+        <h3>Encrypted, and yours to remove</h3>
+        <p>Your Kalshi key is verified, encrypted before storage, and your
+        message is deleted from the chat. It can place orders and nothing else —
+        it cannot withdraw. <code>/disconnect</code> removes it.</p>
+      </div>
+    </div>
+
+    <p class="label" style="margin-top:52px">Markets</p>
+    <h2>Seven coins, every quarter hour.</h2>
+    <div class="coins">
+      <span class="coin">BTC</span><span class="coin">ETH</span>
+      <span class="coin">SOL</span><span class="coin">XRP</span>
+      <span class="coin">DOGE</span><span class="coin">BNB</span>
+      <span class="coin">HYPE</span>
+    </div>
+    <p class="small muted" style="margin-top:16px">
+      Pick any combination. Not every coin has an open window at every hour.
+    </p>
+  </div>
+</section>
+
+<!-- ============ HONESTY ============ -->
+<section class="band">
+  <div class="wrap">
+    <p class="label"><b>Read this</b> &nbsp;/&nbsp; before you pay for anything</p>
+    <div class="callout">
+      <h2>No edge is being claimed here.</h2>
+      <p>
+        The bundled strategies are reference implementations of ordinary
+        microstructure reasoning — book imbalance, short-horizon drift, spread
+        and liquidity filters. They have not been shown to be profitable, and
+        this page will not show you a win rate, an equity curve, or a screenshot
+        of a good day.
+      </p>
+      <p>
+        A high win rate is not profit. It is entirely possible to win three
+        trades in four and still lose money, because the fee is charged twice
+        and the losses are full-stake. That is the single easiest way to mistake
+        a losing system for a winning one, and it is why the numbers you would
+        normally see on a page like this are absent from it.
+      </p>
+      <p>
+        What ships instead is the apparatus for finding out: a recorder that
+        captures the live book to disk, a replay engine that scores a strategy
+        net of real fees, and an analysis tool that refuses to report a verdict
+        until the sample is large enough to support one. Run it in paper mode,
+        record for a couple of weeks, and let the data decide.
+      </p>
+      <p style="margin-bottom:0">
+        <a class="btn btn-primary" href="/app.html" style="margin-top:6px">
+          See it on real recorded books
+        </a>
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PRICING ============ -->
+<section class="band" id="pricing">
+  <div class="wrap">
+    <p class="label">Pricing</p>
+    <h2>Pay in crypto. Access unlocks instantly.</h2>
+    <p class="lede">
+      One key, redeemed in the bot. No card, no subscription to cancel, no
+      auto-renewal.
+    </p>
+
+    <div class="tiers">
+      <div class="tier">
+        <p class="tier-name">Daily</p>
+        <p class="price"><sup>$</sup>25</p>
+        <p class="per">24 hours</p>
+        <ul>
+          <li>Full access</li>
+          <li>All seven markets</li>
+          <li>Try it before committing</li>
+        </ul>
+        <a class="btn btn-ghost" href="#" data-bot-link="buy_daily">Get daily</a>
+      </div>
+
+      <div class="tier">
+        <p class="tier-name">Weekly</p>
+        <p class="price"><sup>$</sup>50</p>
+        <p class="per">7 days</p>
+        <ul>
+          <li>Full access</li>
+          <li>All seven markets</li>
+          <li>Enough windows to judge</li>
+        </ul>
+        <a class="btn btn-ghost" href="#" data-bot-link="buy_weekly">Get weekly</a>
+      </div>
+
+      <div class="tier feature">
+        <p class="tier-name">Monthly</p>
+        <p class="price"><sup>$</sup>100</p>
+        <p class="per">30 days</p>
+        <ul>
+          <li>Full access</li>
+          <li>All seven markets</li>
+          <li>Best value per day</li>
+        </ul>
+        <a class="btn btn-primary" href="#" data-bot-link="buy_monthly">Get monthly</a>
+      </div>
+
+      <div class="tier">
+        <p class="tier-name">Lifetime</p>
+        <p class="price"><sup>$</sup>1000</p>
+        <p class="per">One payment</p>
+        <ul>
+          <li>Full access, permanently</li>
+          <li>All future markets</li>
+          <li>No renewal, ever</li>
+        </ul>
+        <a class="btn btn-ghost" href="#" data-bot-link="buy_lifetime">Get lifetime</a>
+      </div>
+    </div>
+
+    <p class="small muted" style="margin-top:22px">
+      BTC, ETH and USDT accepted. Access covers the software and the signals —
+      trading capital is separate and stays in your own Kalshi account.
+    </p>
+  </div>
+</section>
+
+<!-- ============ FAQ ============ -->
+<section class="band" id="faq">
+  <div class="wrap">
+    <p class="label">Questions</p>
+    <h2>Good to know before you start.</h2>
+
+    <div style="margin-top:26px">
+      <details>
+        <summary>Whose account does it trade on?</summary>
+        <p>Your own. You create an API key in your Kalshi account and connect it
+        in the bot. Your funds never leave your account — the bot only places
+        orders through your key, and it cannot withdraw or move money. Remove the
+        key any time with <code>/disconnect</code>.</p>
+      </details>
+
+      <details>
+        <summary>How much control do I have over how it trades?</summary>
+        <p>Full control. You choose the coins, the strategy, how many contracts
+        per signal, the price band you're willing to enter at, your exit rule,
+        and your risk caps — daily loss limit, maximum open exposure, a balance
+        floor it won't spend below, and how many trades it can take per window.
+        You can stop it at any moment with <code>/stop</code>, or stop everything
+        with <code>/kill</code>.</p>
+      </details>
+
+      <details>
+        <summary>Do I need to trade real money?</summary>
+        <p>Not to start, and you shouldn't. Paper mode runs the identical code
+        path against the real production order book and simulates every fill, so
+        you can watch it trade for as long as you like without a Kalshi account
+        at all. Every new account starts there.</p>
+      </details>
+
+      <details>
+        <summary>Where does it run?</summary>
+        <p>Wherever you put it. It runs on your own machine — Windows, macOS or
+        Linux — or on any small server or container host you prefer. There is a
+        one-command setup script for each. It trades while it is running and does
+        nothing while it is not, so if you want it going around the clock, run it
+        somewhere that stays awake.</p>
+      </details>
+
+      <details>
+        <summary>Is this guaranteed to make money?</summary>
+        <p>No, and anyone who tells you otherwise is lying. Trading involves a
+        real risk of loss, losing windows happen, and past or backtested results
+        do not guarantee future results. This is a tool for executing a strategy
+        consistently and measuring it honestly — it is not a promise of profit.
+        Only trade money you can afford to lose.</p>
+      </details>
+
+      <details>
+        <summary>Has the strategy been proven profitable?</summary>
+        <p>No. That is the plain answer, and it is why this page shows no
+        performance figures. What ships is the machinery to find out for
+        yourself: a recorder, a replay engine that scores net of real Kalshi
+        fees, and a signal analysis tool that withholds any verdict until the
+        sample is genuinely large enough. Roughly two weeks of recording is what
+        it takes to resolve the question either way.</p>
+      </details>
+
+      <details>
+        <summary>Why sell access instead of just trading it yourself?</summary>
+        <p>Position size on 15-minute markets is capped by the liquidity in each
+        window — past a certain size you move the price against yourself and any
+        edge shrinks. Access fees are revenue that doesn't compete with your own
+        fills, and they fund the infrastructure and the ongoing research.</p>
+      </details>
+
+      <details>
+        <summary>How do I pay and get access?</summary>
+        <p>Pick a plan above and it opens the bot on that tier. Pay in BTC, ETH
+        or USDT to the address it shows you, and once the payment is confirmed
+        your access key is delivered in the chat. Redeem it with
+        <code>/redeem</code> and you're in.</p>
+      </details>
+
+      <details>
+        <summary>What happens if it crashes mid-order?</summary>
+        <p>Every order is written to disk before it is sent, keyed by the ID it
+        will carry. On the next start, anything with no recorded outcome is
+        checked against Kalshi directly, so an order that reached the exchange
+        while the process was down is found and booked rather than lost.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CTA ============ -->
+<section class="band">
+  <div class="wrap">
+    <p class="label">Start</p>
+    <h2>Paper mode is free to watch.</h2>
+    <p class="lede">
+      Open the bot, pick your coins, and let it run. Connect a Kalshi key only
+      when you've seen enough to want to.
+    </p>
+    <div class="btn-row">
+      <a class="btn btn-primary" href="#" data-bot-link="">Open in Telegram</a>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="risk">
+      <strong>Risk disclaimer.</strong> Trading event contracts involves
+      substantial risk of loss and is not suitable for everyone. Nothing on this
+      page is investment advice, a recommendation, or a solicitation. Signals are
+      generated by software and can be wrong. Past performance and backtested
+      results do not guarantee future results. You are solely responsible for
+      every order placed on your account. Only trade money you can afford to
+      lose entirely.
+    </p>
+    <p>
+      DirectionalBot is an independent tool. It is not affiliated with,
+      endorsed by, or operated by Kalshi. Kalshi is a registered trademark of its
+      owner. You trade on your own Kalshi account, under your own API key,
+      subject to Kalshi's terms and your local law.
+    </p>
+    <p style="margin-top:20px">
+      <a href="/">Overview</a> &nbsp;·&nbsp;
+      <a href="/app.html">Strategy simulator</a> &nbsp;·&nbsp;
+      <a href="https://github.com/risenbymind-cell/claude-tgb">Source</a>
+    </p>
+    <p class="mono" style="margin-top:18px;font-size:11px;letter-spacing:.1em;color:var(--ink-3)">
+      DIRECTIONALBOT &mdash; 15-MINUTE CRYPTO MARKETS
+    </p>
+  </div>
+</footer>
+
+<script>
+/* -----------------------------------------------------------------
+   Set your bot's @username here. Every button on the page uses it.
+   ----------------------------------------------------------------- */
+const BOT = "YourBotUsername";
+
+for (const el of document.querySelectorAll("[data-bot-link]")) {
+  const payload = el.getAttribute("data-bot-link");
+  el.href = "https://t.me/" + BOT + (payload ? "?start=" + payload : "");
+}
+
+/* -----------------------------------------------------------------
+   The countdown is a clock, not a quote. Kalshi opens a fresh
+   15-minute market on every quarter hour, so the next boundary is
+   arithmetic on the local time -- nothing is fetched, and nothing
+   here is presented as market data.
+   ----------------------------------------------------------------- */
+const cdEl = document.getElementById("countdown");
+const lblEl = document.getElementById("window-label");
+const pad = (n) => String(n).padStart(2, "0");
+
+function tick() {
+  const now = new Date();
+  const next = new Date(now);
+  next.setSeconds(0, 0);
+  next.setMinutes(Math.floor(now.getMinutes() / 15) * 15 + 15);
+
+  const left = Math.max(0, Math.floor((next - now) / 1000));
+  cdEl.textContent = pad(Math.floor(left / 60)) + ":" + pad(left % 60);
+  lblEl.textContent = pad(next.getHours()) + ":" + pad(next.getMinutes());
+}
+
+tick();
+setInterval(tick, 1000);
+</script>
