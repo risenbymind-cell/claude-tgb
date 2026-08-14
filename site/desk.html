@@ -47,8 +47,10 @@ h1,h2{margin:0;font-family:var(--mono);letter-spacing:-.02em}
 h1{font-size:15px;font-weight:600;text-transform:uppercase}
 h2{font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.1em;
   color:var(--ink-3);margin:26px 0 10px}
+p.hint{color:var(--ink-2);font-size:12.5px;max-width:70ch;margin:0 0 14px}
 .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
 .pos{color:var(--up)}.neg{color:var(--down)}.dim{color:var(--ink-3)}
+a{color:var(--accent)}
 
 header{border-bottom:1px solid var(--rule);background:var(--surface);position:sticky;top:0;z-index:20}
 .bar{display:flex;gap:14px;align-items:center;flex-wrap:wrap;padding:12px 20px;max-width:1320px;margin:0 auto}
@@ -60,6 +62,20 @@ header{border-bottom:1px solid var(--rule);background:var(--surface);position:st
 .chip.hot{border-color:var(--down);color:var(--down)}
 .chip.live{border-color:var(--up);color:var(--up)}
 
+/* ---------------- tabs ---------------- */
+.tabs{display:flex;gap:2px;overflow-x:auto;padding:0 20px;max-width:1320px;margin:0 auto;
+  border-top:1px solid var(--rule-soft);scrollbar-width:none}
+.tabs::-webkit-scrollbar{display:none}
+.tab-btn{flex:0 0 auto;font:600 11px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  padding:11px 14px;background:transparent;border:0;border-bottom:2px solid transparent;
+  color:var(--ink-3);cursor:pointer;white-space:nowrap;border-radius:0}
+.tab-btn:hover{background:transparent;color:var(--ink)}
+.tab-btn[aria-selected="true"]{color:var(--ink);border-bottom-color:var(--accent)}
+.tab-btn .n{display:inline-block;margin-left:6px;padding:1px 5px;border-radius:8px;
+  background:var(--surface-2);color:var(--ink-3);font-size:9px}
+.tabpanel{display:none}
+.tabpanel.active{display:block}
+
 .banner{padding:11px 0;font-size:13px;border-bottom:1px solid var(--rule)}
 .banner.paper{background:var(--accent-soft)}
 .banner.real{background:color-mix(in srgb,var(--down) 14%,transparent)}
@@ -70,14 +86,17 @@ header{border-bottom:1px solid var(--rule);background:var(--surface);position:st
   padding:14px 16px;margin:18px 0;box-shadow:var(--shadow)}
 .ctl{display:flex;flex-direction:column;gap:6px}
 .ctl label{font:500 10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3)}
-select,input[type=number]{font:500 13px var(--sans);padding:7px 9px;border-radius:6px;
+select,input[type=number],input[type=text],input[type=password],textarea{
+  font:500 13px var(--sans);padding:7px 9px;border-radius:6px;
   border:1px solid var(--rule);background:var(--paper);color:var(--ink)}
 input[type=number]{width:82px}
+textarea{font-family:var(--mono);font-size:12px;resize:vertical;width:100%}
 button{font:600 13px var(--sans);padding:9px 16px;border-radius:6px;cursor:pointer;
   border:1px solid transparent;background:var(--ink);color:var(--paper)}
 button:hover{background:var(--accent);color:var(--on-accent)}
 button.ghost{background:transparent;border-color:var(--rule);color:var(--ink)}
 button.danger{background:var(--down);color:#fff}
+button.warn{background:var(--warn);color:#fff}
 button:disabled{opacity:.45;cursor:not-allowed}
 button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
@@ -96,6 +115,8 @@ button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid 
    VWAP it is measured against, and the resting depth on both sides. */
 .panel{background:var(--surface);border:1px solid var(--rule);border-radius:12px;
   box-shadow:var(--shadow);margin:18px 0}
+.panel-pad{padding:16px 18px}
+.panel h3{margin:0 0 12px;font:600 12px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase}
 .focus{padding:16px 18px 14px}
 .focus-head{display:flex;justify-content:space-between;align-items:flex-start;
   gap:14px;margin-bottom:12px;flex-wrap:wrap}
@@ -145,6 +166,33 @@ tbody#markets tr.sel{outline:2px solid var(--accent);outline-offset:-2px}
 footer{margin:34px 0 50px;color:var(--ink-3);font-size:12px}
 footer p{max-width:80ch}
 
+/* ---------------- risk / connect / audit ---------------- */
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:18px}
+@media(max-width:900px){.grid2{grid-template-columns:1fr}}
+.kv{display:grid;grid-template-columns:auto 1fr;gap:7px 14px;font-size:13px}
+.kv dt{color:var(--ink-3);font:500 10px/1.4 var(--mono);letter-spacing:.09em;text-transform:uppercase;
+  white-space:nowrap;padding-top:2px}
+.kv dd{margin:0;font-family:var(--mono)}
+.badge{display:inline-block;font:600 10px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase;
+  padding:4px 8px;border-radius:4px;border:1px solid var(--rule)}
+.badge.ok{border-color:var(--up);color:var(--up)}
+.badge.no{border-color:var(--ink-3);color:var(--ink-3)}
+.badge.bad{border-color:var(--down);color:var(--down)}
+.arm-step{border:1px solid var(--rule);border-radius:8px;padding:12px 14px;margin-top:10px}
+.arm-step.done{border-color:var(--up)}
+.arm-step label{display:block;font:500 10px/1 var(--mono);letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-3);margin-bottom:6px}
+.arm-step input{width:100%;margin-bottom:8px}
+.warn-box{background:color-mix(in srgb,var(--warn) 12%,transparent);border:1px solid var(--warn);
+  border-radius:8px;padding:11px 13px;font-size:12.5px;color:var(--ink);margin-bottom:14px}
+.msg{font-size:12.5px;margin-top:8px;min-height:1.4em}
+.msg.err{color:var(--down)}
+.msg.ok{color:var(--up)}
+.runbook{margin-bottom:22px}
+.runbook h3{font:600 13px var(--mono);margin:0 0 6px}
+.runbook ol,.runbook ul{margin:0;padding-left:20px;color:var(--ink-2);font-size:13px}
+.runbook li{margin-bottom:4px}
+
 /* ---------------- phone ----------------
    Below 760px the tables become cards. A 900px-wide table on a 390px screen
    is not a layout problem, it is an unusable page: the columns that matter
@@ -159,11 +207,13 @@ footer p{max-width:80ch}
   .wrap{padding:0 14px}
   .bar{padding:10px 14px;gap:8px}
   .chip{padding:5px 7px;font-size:9px}
+  .tabs{padding:0 10px}
+  .tab-btn{padding:10px 11px;font-size:10px}
 
   /* Controls stack, and every control is thumb-sized. */
   .controls{gap:12px;padding:12px}
   .ctl{flex:1 1 calc(50% - 6px);min-width:0}
-  select,input[type=number]{width:100%;font-size:16px;padding:11px 10px}
+  select,input[type=number],input[type=text],input[type=password]{width:100%;font-size:16px;padding:11px 10px}
   button{flex:1 1 100%;padding:13px 16px;font-size:15px}
   #kill,#resume{flex:1 1 calc(50% - 6px)}
 
@@ -176,6 +226,8 @@ footer p{max-width:80ch}
   .focus-mid{font-size:22px}
   canvas{height:200px}
   .legend{font-size:11px;gap:12px}
+
+  .grid2{gap:12px}
 
   /* Table -> cards. */
   .tablewrap{border:0;background:transparent;overflow:visible}
@@ -199,7 +251,8 @@ footer p{max-width:80ch}
     text-transform:uppercase;color:var(--ink-3);
   }
   /* Coin and the money column get the full width and more weight. */
-  td[data-k="coin"],td[data-k="net"],td[data-k="signals"],td[data-k="why"]{
+  td[data-k="coin"],td[data-k="net"],td[data-k="signals"],td[data-k="why"],
+  td[data-k="detail"],td[data-k="reason"]{
     grid-column:1 / -1;
   }
   td[data-k="coin"]{
@@ -234,12 +287,23 @@ footer p{max-width:80ch}
 
 <header>
   <div class="bar">
-    <span class="brand">Directional<span class="dot">.</span>desk</span>
+    <span class="brand">Aether<span class="dot">.</span>desk</span>
+    <span class="chip" id="c-armed">—</span>
+    <span class="chip" id="c-circuit">—</span>
     <span class="chip" id="c-mode">—</span>
     <span class="chip" id="c-feed">—</span>
-    <span class="chip" id="c-kill">—</span>
     <span class="chip" id="c-conn">connecting…</span>
   </div>
+  <nav class="tabs" role="tablist">
+    <button class="tab-btn" data-tab="desk" role="tab">Desk</button>
+    <button class="tab-btn" data-tab="markets" role="tab">Markets</button>
+    <button class="tab-btn" data-tab="decisions" role="tab">Decisions</button>
+    <button class="tab-btn" data-tab="ledger" role="tab">Ledger</button>
+    <button class="tab-btn" data-tab="risk" role="tab">Risk</button>
+    <button class="tab-btn" data-tab="connect" role="tab">Connect</button>
+    <button class="tab-btn" data-tab="audit" role="tab">Audit</button>
+    <button class="tab-btn" data-tab="runbooks" role="tab">Runbooks</button>
+  </nav>
 </header>
 
 <div class="banner paper" id="banner">
@@ -248,6 +312,8 @@ footer p{max-width:80ch}
 
 <div class="wrap">
 
+<!-- ================= DESK ================= -->
+<section class="tabpanel" id="tab-desk">
   <div class="controls">
     <div class="ctl">
       <label for="strategy">Strategy</label>
@@ -292,15 +358,29 @@ footer p{max-width:80ch}
     <div class="ladder" id="ladder"></div>
   </section>
 
+  <h2>Live posture</h2>
+  <div class="panel panel-pad">
+    <dl class="kv" id="posture"></dl>
+  </div>
+</section>
+
+<!-- ================= MARKETS ================= -->
+<section class="tabpanel" id="tab-markets">
   <h2>Live markets</h2>
+  <p class="hint">Every column here is measured, not modeled: IMB is resting YES minus NO depth over
+    total depth; MOM20 is the fair-value change over the last 20s; RT FEE is Kalshi's real round-trip
+    fee (open + close) for the contracts-per-trade size configured on the Desk tab, at the current ask.
+    REJECTS is real too — it is zero because this build has never routed a live order.</p>
   <div class="tablewrap">
     <table>
       <thead><tr>
         <th>Coin</th><th class="num">Closes</th><th class="num">Mid</th>
+        <th class="num">IMB</th><th class="num">MOM20</th>
         <th class="num">Spread</th><th class="num">Depth</th>
         <th class="num">VWAP</th><th class="num">Range</th>
-        <th>Extension</th><th class="num">Vel</th><th class="num">Age</th>
-        <th>Signals</th>
+        <th>Extension</th><th class="num">Vel</th>
+        <th class="num">RT Fee</th><th class="num">Rejects</th>
+        <th class="num">Age</th><th>Signals</th>
       </tr></thead>
       <tbody id="markets"></tbody>
     </table>
@@ -308,15 +388,37 @@ footer p{max-width:80ch}
   <div class="empty" id="markets-empty" hidden>
     No live 15-minute markets right now. Kalshi opens a fresh set every quarter hour.
   </div>
+</section>
 
-  <h2>Trades</h2>
+<!-- ================= DECISIONS ================= -->
+<section class="tabpanel" id="tab-decisions">
+  <h2>Recent decisions</h2>
+  <p class="hint">Every pass, every market, for the currently selected strategy — fired or not. This is
+    what makes "why didn't it trade" answerable: <code class="mono">no_signal</code> means the strategy's
+    own filters declined that pass, not that nothing was checked.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th>Coin</th><th>Strategy</th><th>Dir</th><th class="num">Conf</th>
+        <th class="num">Ext</th><th class="num">Vel</th><th class="num">TTL</th>
+        <th>Why</th><th class="num">When</th>
+      </tr></thead>
+      <tbody id="decisions"></tbody>
+    </table>
+  </div>
+  <div class="empty" id="decisions-empty" hidden>No decisions logged yet.</div>
+</section>
+
+<!-- ================= LEDGER ================= -->
+<section class="tabpanel" id="tab-ledger">
+  <h2>Ledger</h2>
   <div class="tablewrap">
     <table>
       <thead><tr>
         <th>Coin</th><th>Side</th><th class="num">Size</th>
         <th class="num">Entry</th><th class="num">Target</th><th class="num">Exit</th>
         <th class="num">Fees</th><th class="num">Net</th>
-        <th class="num">Age</th><th>Outcome</th><th>Why</th>
+        <th class="num">Age</th><th>Outcome</th><th>CLID</th><th>Why</th>
       </tr></thead>
       <tbody id="trades"></tbody>
     </table>
@@ -332,8 +434,154 @@ footer p{max-width:80ch}
     of Kalshi's real fee on both legs.</p>
     <p>No edge has been demonstrated for any strategy here. Read the net column,
     not the win rate — small targets can win nine times in ten and still lose money,
-    because the fee is charged twice.</p>
+    because the fee is charged twice. CLID is a locally generated identifier for the
+    simulated trade, not an exchange order ID — no live order has ever been placed by
+    this build.</p>
   </footer>
+</section>
+
+<!-- ================= RISK ================= -->
+<section class="tabpanel" id="tab-risk">
+  <h2>Circuit</h2>
+  <div class="panel panel-pad">
+    <div class="controls" style="margin:0;padding:0;border:0;box-shadow:none;background:transparent">
+      <button class="danger" id="risk-kill">Kill</button>
+      <button class="ghost" id="risk-resume">Resume</button>
+      <button class="ghost" id="risk-shadow">Enable shadow</button>
+      <button class="ghost" id="risk-health">Check clock</button>
+      <button class="ghost" id="risk-reconcile">Reconcile</button>
+    </div>
+    <p class="hint" style="margin-top:12px">
+      <b>Shadow</b> lets the selected strategy fire and log signals exactly as normal, without opening
+      a position — for watching what it would do before letting it act.
+      <b>Reconcile</b> forces a fresh discovery pass; there is no live broker wired yet, so there is
+      nothing exchange-side to reconcile against beyond that.
+      <b>Check clock</b> compares this machine's clock to Kalshi's, the same check the bot runs at boot.
+    </p>
+    <div class="msg" id="risk-msg"></div>
+  </div>
+
+  <h2>Production arming</h2>
+  <div class="panel panel-pad">
+    <p class="hint">This UI flow can only <b>expose</b> the backend's real gate — it cannot widen it.
+      Real orders require the process itself to have been started with
+      <code class="mono">TRADING_MODE=production-live</code> and
+      <code class="mono">ALLOW_PRODUCTION_ORDERS</code> set. Arming here does not change that, and this
+      build has no order path wired to the exchange in any mode yet — arming is the honest UI for a gate
+      that exists, not a claim that live orders will be sent.</p>
+    <div class="arm-step" id="arm-a-box">
+      <label for="arm-a">Step 1 — type exactly: I UNDERSTAND THIS TRADES REAL MONEY</label>
+      <input type="text" id="arm-a" autocomplete="off" spellcheck="false">
+      <button class="warn" id="arm-a-btn">Confirm step 1</button>
+    </div>
+    <div class="arm-step" id="arm-b-box">
+      <label for="arm-b">Step 2 — type exactly: ENABLE PRODUCTION LIVE</label>
+      <input type="text" id="arm-b" autocomplete="off" spellcheck="false">
+      <button class="danger" id="arm-b-btn">Confirm step 2</button>
+    </div>
+    <div class="msg" id="arm-msg"></div>
+    <div style="margin-top:10px">
+      <button class="ghost" id="arm-disarm">Disarm</button>
+    </div>
+  </div>
+</section>
+
+<!-- ================= CONNECT ================= -->
+<section class="tabpanel" id="tab-connect">
+  <h2>Connect Kalshi keys</h2>
+  <div class="warn-box" id="connect-warn">Checking MASTER_KEY strength…</div>
+  <div class="panel panel-pad">
+    <p class="hint">The key ID and private key are sent to this desk process only — the same process
+      already holding your <code class="mono">.env</code>. They are encrypted at rest with
+      <b>AES-256-GCM</b> (via Fernet, keyed by your <code class="mono">MASTER_KEY</code>) before being
+      written to disk, and the private key is never echoed back — only a masked ID and a fingerprint.
+      This connects the desk's own market-data/order client; it does not by itself enable production
+      orders (see the Risk tab).</p>
+    <div class="ctl" style="margin-bottom:10px">
+      <label for="conn-keyid">API key ID</label>
+      <input type="text" id="conn-keyid" autocomplete="off" spellcheck="false" placeholder="00000000-0000-0000-0000-000000000000">
+    </div>
+    <div class="ctl" style="margin-bottom:10px">
+      <label for="conn-pem">RSA private key (PEM)</label>
+      <textarea id="conn-pem" rows="8" placeholder="-----BEGIN PRIVATE KEY-----"></textarea>
+    </div>
+    <button id="conn-submit">Connect</button>
+    <div class="msg" id="conn-msg"></div>
+  </div>
+  <h2>Status</h2>
+  <div class="panel panel-pad">
+    <dl class="kv" id="conn-status"></dl>
+  </div>
+</section>
+
+<!-- ================= AUDIT ================= -->
+<section class="tabpanel" id="tab-audit">
+  <h2>Audit log</h2>
+  <p class="hint">Every command, kill, arming step, connect and engine boot — newest first. Secrets are
+    redacted before anything is written: the connect action logs a masked key ID and a fingerprint,
+    never the key itself.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th class="num">When</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
+      <tbody id="audit"></tbody>
+    </table>
+  </div>
+  <div class="empty" id="audit-empty" hidden>Nothing logged yet.</div>
+</section>
+
+<!-- ================= RUNBOOKS ================= -->
+<section class="tabpanel" id="tab-runbooks">
+  <h2>Runbooks</h2>
+  <p class="hint">Static reference, not live data — procedures for the situations this desk is built to
+    handle.</p>
+
+  <div class="runbook">
+    <h3>Stop trading immediately</h3>
+    <ol>
+      <li>Click <b>Kill</b> on the Desk or Risk tab, or run <code class="mono">/kill</code> from the
+        Telegram bot if it is running.</li>
+      <li>The kill switch is also a file at <code class="mono">&lt;data dir&gt;/KILL</code> — creating it
+        by hand from a shell works even if this page is unreachable.</li>
+      <li>Confirm the header chip reads <b>KILLED</b>. The strategy loop keeps evaluating and logging
+        decisions while killed; it only stops opening new positions.</li>
+      <li>Click <b>Resume</b> (or delete the KILL file) when ready to continue.</li>
+    </ol>
+  </div>
+
+  <div class="runbook">
+    <h3>Understand a mode</h3>
+    <ul>
+      <li><b>Paper</b> — no orders sent anywhere; simulated fills against the real production book.</li>
+      <li><b>Demo-live</b> — real orders on Kalshi's demo exchange, spending demo funds. The demo book is
+        thin, so P/L there is not evidence about the strategy, only about whether the order code works.</li>
+      <li><b>Production-live</b> — real orders, real money. Requires two independent environment
+        variables at process start; this desk cannot change your money's exposure by itself.</li>
+    </ul>
+  </div>
+
+  <div class="runbook">
+    <h3>Recorder went quiet</h3>
+    <ol>
+      <li>Check the Markets tab — zero rows with markets known to be open on Kalshi means the feed, not
+        the exchange, is the problem.</li>
+      <li>Click <b>Reconcile</b> on the Risk tab to force a fresh discovery pass.</li>
+      <li>If that does not recover it, restart the desk process — a pooled connection dying under a
+        suspended container is indistinguishable from an empty result otherwise.</li>
+    </ol>
+  </div>
+
+  <div class="runbook">
+    <h3>Before arming production</h3>
+    <ul>
+      <li>Read the Ledger tab's own disclaimer: no edge has been demonstrated for any strategy here.</li>
+      <li>Confirm <code class="mono">MASTER_KEY</code> is a real generated key, not the auto-generated
+        ephemeral one — check the warning banner on the Connect tab.</li>
+      <li>Run a clock check on the Risk tab; signed requests fail silently as auth errors when the clock
+        has drifted, which reads like a bad key.</li>
+    </ul>
+  </div>
+</section>
+
 </div>
 
 <script>
@@ -341,6 +589,12 @@ const $ = (id) => document.getElementById(id);
 const dc = (v) => v === null || v === undefined ? "—" : (v / 10).toFixed(1) + "c";
 const money = (cents) => (cents < 0 ? "-$" : "$") + (Math.abs(cents) / 1000).toFixed(2);
 const clock = (s) => s == null ? "—" : Math.floor(s / 60) + ":" + String(Math.max(0, s % 60)).padStart(2, "0");
+const ago = (ts) => {
+  const s = Math.max(0, Math.round(Date.now() / 1000 - ts));
+  return s < 60 ? s + "s ago" : Math.floor(s / 60) + "m ago";
+};
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
 let state = null, dirty = false, focus = null;
 
@@ -349,12 +603,30 @@ async function api(path, body) {
     method: "POST", headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body),
   } : {});
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({error: res.statusText}));
-    throw new Error(err.error || res.statusText);
+  const payload = await res.json().catch(() => ({}));
+  if (!res.ok && !("ok" in payload)) {
+    throw new Error(payload.error || res.statusText);
   }
-  return res.json();
+  return payload;
 }
+
+/* ------------------------------------------------------------------
+   Tabs. State (which tab, focused market) lives in localStorage so a
+   reload -- common on a phone that just backgrounded the page -- lands
+   back where the operator left it instead of resetting to Desk.
+   ------------------------------------------------------------------ */
+function showTab(name) {
+  localStorage.setItem("desk-tab", name);
+  for (const btn of document.querySelectorAll(".tab-btn")) {
+    btn.setAttribute("aria-selected", String(btn.dataset.tab === name));
+  }
+  for (const p of document.querySelectorAll(".tabpanel")) {
+    p.classList.toggle("active", p.id === "tab-" + name);
+  }
+  if (name === "desk" && state) drawFocus(state.markets.find((m) => m.ticker === focus));
+}
+document.querySelectorAll(".tab-btn").forEach((b) => (b.onclick = () => showTab(b.dataset.tab)));
+showTab(localStorage.getItem("desk-tab") || "desk");
 
 function render(s) {
   state = s;
@@ -363,18 +635,23 @@ function render(s) {
   $("c-mode").textContent = s.mode;
   $("c-mode").className = "chip " + (s.risks_real_money ? "hot" : "on");
   $("c-feed").textContent = s.feed;
-  $("c-kill").textContent = s.kill.engaged ? "KILLED" : "armed";
-  $("c-kill").className = "chip " + (s.kill.engaged ? "hot" : "");
+  $("c-circuit").textContent = s.kill.engaged ? "CIRCUIT: OPEN" : "CIRCUIT: CLOSED";
+  $("c-circuit").className = "chip " + (s.kill.engaged ? "hot" : "live");
+  const armedLabel = s.live_posture.production_armed ? "ARMED" : s.shadow ? "SHADOW" : "PAPER";
+  $("c-armed").textContent = armedLabel;
+  $("c-armed").className = "chip " + (s.live_posture.production_armed ? "hot" : s.shadow ? "on" : "");
 
   const b = $("banner");
   b.className = "banner " + (s.risks_real_money ? "real" : "paper");
   $("banner-text").innerHTML = s.kill.engaged
-    ? `<b>Kill switch engaged.</b> ${s.kill.detail}. No orders will be placed.`
-    : `<b>${s.mode_label}</b>`;
+    ? `<b>Kill switch engaged.</b> ${esc(s.kill.detail)}. No orders will be placed.`
+    : `<b>${esc(s.mode_label)}</b>`;
 
   $("resume").hidden = !s.kill.engaged;
   $("toggle").textContent = s.enabled ? "Stop trading" : "Start trading";
   $("toggle").disabled = s.kill.engaged;
+  $("risk-shadow").textContent = s.shadow ? "Disable shadow" : "Enable shadow";
+  $("risk-shadow").className = s.shadow ? "on" : "ghost";
 
   if (!dirty) {
     if ($("strategy").options.length !== s.strategies.length) {
@@ -397,6 +674,24 @@ function render(s) {
     + stat("Fees", money(-p.fees_dc), "neg")
     + stat("Net", money(p.net_dc), p.net_dc >= 0 ? "pos" : "neg");
 
+  // Live posture
+  const lp = s.live_posture;
+  const clockRow = lp.clock
+    ? `<span class="badge ${lp.clock.ok ? "ok" : "bad"}">${lp.clock.ok ? "in sync" : "drifted"}</span> ${esc(lp.clock.detail)}`
+    : `<span class="badge no">not checked</span> run "Check clock" on the Risk tab`;
+  $("posture").innerHTML = `
+    <dt>Mode</dt><dd>${esc(lp.mode_label)}</dd>
+    <dt>Feed</dt><dd>${esc(lp.feed)}</dd>
+    <dt>Clock sync</dt><dd>${clockRow}</dd>
+    <dt>Keys</dt><dd>${lp.keys_connected
+      ? `<span class="badge ok">connected</span> ${esc(lp.connected_key_id)}`
+      : `<span class="badge no">none connected</span> using platform market-data key, if any`}</dd>
+    <dt>Production armed</dt><dd>${lp.production_armed
+      ? `<span class="badge bad">ARMED</span>`
+      : `<span class="badge no">not armed</span>`}</dd>
+    <dt>Why</dt><dd class="dim">${esc(lp.why)}</dd>
+  `;
+
   // Default to whichever market is signalling, else the first. Once the
   // operator picks one it stays picked -- a panel that jumps as signals
   // arrive is unreadable.
@@ -404,19 +699,34 @@ function render(s) {
     const signalling = s.markets.find((m) => m.signals.length);
     focus = (signalling || s.markets[0] || {}).ticker || null;
   }
-  drawFocus(s.markets.find((m) => m.ticker === focus));
+  if (document.getElementById("tab-desk").classList.contains("active")) {
+    drawFocus(s.markets.find((m) => m.ticker === focus));
+  }
 
+  renderMarkets(s);
+  renderDecisions(s);
+  renderLedger(s);
+  renderRisk(s);
+  renderConnect(s);
+  renderAudit(s);
+}
+
+function renderMarkets(s) {
   $("markets-empty").hidden = s.markets.length > 0;
   $("markets").innerHTML = s.markets.map((m) => {
     const ext = m.extension;
     const pct = ext === null ? 0 : Math.min(100, Math.abs(ext) * 100);
     const sig = m.signals.map((x) =>
-      `<span class="sig">${x.strategy}:${x.side.toUpperCase()} ${(x.confidence*100).toFixed(0)}%</span>`
+      `<span class="sig">${esc(x.strategy)}:${x.side.toUpperCase()} ${(x.confidence*100).toFixed(0)}%</span>`
     ).join(" · ");
+    const imb = m.imbalance === null ? "—" : (m.imbalance > 0 ? "+" : "") + (m.imbalance * 100).toFixed(0) + "%";
+    const mom = m.mom20_dc === null ? "—" : (m.mom20_dc > 0 ? "+" : "") + dc(m.mom20_dc);
     return `<tr data-ticker="${m.ticker}" class="${m.signals.length ? "hot" : ""}${m.ticker === focus ? " sel" : ""}">
       <td data-k="coin" class="mono"><b>${m.coin}</b><span class="card-label">${clock(m.seconds_to_close)} left</span></td>
       <td data-k="closes" class="num"><span class="card-label">Closes</span>${clock(m.seconds_to_close)}</td>
       <td data-k="mid" class="num"><span class="card-label">Mid</span>${dc(m.mid_dc)}</td>
+      <td data-k="imb" class="num ${m.imbalance > 0 ? "pos" : m.imbalance < 0 ? "neg" : ""}"><span class="card-label">Imbalance</span>${imb}</td>
+      <td data-k="mom" class="num"><span class="card-label">Momentum 20s</span>${mom}</td>
       <td data-k="spread" class="num"><span class="card-label">Spread</span>${dc(m.spread_dc)}</td>
       <td data-k="depth" class="num"><span class="card-label">Depth</span>${m.depth.toLocaleString()}</td>
       <td data-k="vwap" class="num"><span class="card-label">VWAP</span>${dc(m.vwap_dc)}</td>
@@ -424,15 +734,37 @@ function render(s) {
       <td data-k="ext" class="num bar-cell"><span class="card-label">Extension</span>${ext === null ? "—" : (ext > 0 ? "+" : "") + ext.toFixed(2)}
         <span class="bar-fill" style="width:${pct}%"></span></td>
       <td data-k="vel" class="num"><span class="card-label">Velocity</span>${m.velocity_dc === null ? "—" : m.velocity_dc.toFixed(0)}</td>
+      <td data-k="rtfee" class="num dim"><span class="card-label">RT Fee</span>${m.rt_fee_dc === null ? "—" : money(m.rt_fee_dc)}</td>
+      <td data-k="rejects" class="num dim"><span class="card-label">Rejects</span>0</td>
       <td data-k="age" class="num ${m.book_age_s > 8 ? "neg" : "dim"}"><span class="card-label">Book age</span>${m.book_age_s.toFixed(0)}s</td>
       <td data-k="signals"><span class="card-label">Signals</span>${sig || '<span class="dim">none</span>'}</td>
     </tr>`;
   }).join("");
 
   for (const row of $("markets").querySelectorAll("tr[data-ticker]")) {
-    row.onclick = () => { focus = row.dataset.ticker; render(state); };
+    row.onclick = () => { focus = row.dataset.ticker; showTab("desk"); render(state); };
   }
+}
 
+function renderDecisions(s) {
+  const rows = s.decisions || [];
+  $("decisions-empty").hidden = rows.length > 0;
+  $("decisions").innerHTML = rows.map((d) => `
+    <tr class="${d.fired ? "hot" : ""}">
+      <td data-k="coin" class="mono"><b>${esc(d.coin)}</b></td>
+      <td data-k="strategy"><span class="card-label">Strategy</span>${esc(d.strategy)}</td>
+      <td data-k="dir"><span class="card-label">Dir</span>${d.side
+        ? `<span class="side ${d.side}">${d.side.toUpperCase()}</span>` : '<span class="dim">—</span>'}</td>
+      <td data-k="conf" class="num"><span class="card-label">Conf</span>${d.confidence === null ? "—" : (d.confidence * 100).toFixed(0) + "%"}</td>
+      <td data-k="ext" class="num"><span class="card-label">Ext</span>${d.extension === null ? "—" : d.extension.toFixed(2)}</td>
+      <td data-k="vel" class="num"><span class="card-label">Vel</span>${d.velocity_dc === null ? "—" : d.velocity_dc.toFixed(0)}</td>
+      <td data-k="ttl" class="num"><span class="card-label">TTL</span>${clock(d.seconds_to_close)}</td>
+      <td data-k="why" class="dim"><span class="card-label">Why</span>${esc(d.reason)}</td>
+      <td data-k="when" class="num dim"><span class="card-label">When</span>${ago(d.ts)}</td>
+    </tr>`).join("");
+}
+
+function renderLedger(s) {
   $("trades-empty").hidden = s.positions.length > 0;
   $("trades").innerHTML = s.positions.map((t) => `
     <tr>
@@ -449,7 +781,47 @@ function render(s) {
         ${t.outcome === "open" ? "—" : "<b>" + money(t.net_dc) + "</b>"}</td>
       <td data-k="age" class="num dim"><span class="card-label">Age</span>${t.age_s}s</td>
       <td data-k="outcome" class="${t.outcome === "open" ? "dim" : ""}"><span class="card-label">Outcome</span>${t.outcome}</td>
-      <td data-k="why" class="dim"><span class="card-label">Why</span>${t.reason}</td>
+      <td data-k="clid" class="dim mono"><span class="card-label">CLID</span>${esc(t.client_order_id)}</td>
+      <td data-k="why" class="dim"><span class="card-label">Why</span>${esc(t.reason)}</td>
+    </tr>`).join("");
+}
+
+function renderRisk(s) {
+  const lp = s.live_posture;
+  $("arm-a-box").classList.toggle("done", lp.armed_step_a);
+  $("arm-b-box").classList.toggle("done", lp.production_armed);
+}
+
+function renderConnect(s) {
+  const lp = s.live_posture;
+  const warn = $("connect-warn");
+  if (lp.master_key_is_ephemeral) {
+    warn.hidden = false;
+    warn.textContent = "No MASTER_KEY is set in this process's environment -- a key was "
+      + "generated in memory for this run only. Anything encrypted with it, including a "
+      + "key connected here, becomes unreadable the moment this process restarts. Set "
+      + "MASTER_KEY in .env (python -m kbot.tools genkey) before connecting real credentials.";
+  } else {
+    warn.hidden = true;
+  }
+  $("conn-status").innerHTML = `
+    <dt>Keys</dt><dd>${lp.keys_connected
+      ? `<span class="badge ok">connected</span> ${esc(lp.connected_key_id)}`
+      : `<span class="badge no">not connected</span>`}</dd>
+    <dt>Host</dt><dd>${esc(s.host)}</dd>
+    <dt>Environment</dt><dd>${esc(lp.mode_label)}</dd>
+  `;
+}
+
+function renderAudit(s) {
+  const rows = s.audit || [];
+  $("audit-empty").hidden = rows.length > 0;
+  $("audit").innerHTML = rows.map((a) => `
+    <tr>
+      <td data-k="when" class="num dim"><span class="card-label">When</span>${ago(a.ts)}</td>
+      <td data-k="actor"><span class="card-label">Actor</span>${esc(a.actor)}</td>
+      <td data-k="action" class="mono"><span class="card-label">Action</span>${esc(a.action)}</td>
+      <td data-k="detail" class="dim mono"><span class="card-label">Detail</span>${esc(JSON.stringify(a.detail))}</td>
     </tr>`).join("");
 }
 
@@ -600,6 +972,72 @@ for (const id of ["size", "target"]) {
     } finally { dirty = false; }
   };
 }
+
+/* ---------------- Risk tab ---------------- */
+$("risk-kill").onclick = async () => render(await api("/api/kill", {reason: "stopped from the desk"}));
+$("risk-resume").onclick = async () => render(await api("/api/resume", {}));
+$("risk-shadow").onclick = async () => render(await api("/api/shadow", {enabled: !state.shadow}));
+$("risk-health").onclick = async () => {
+  const m = $("risk-msg");
+  m.textContent = "checking…"; m.className = "msg";
+  try {
+    const r = await api("/api/health", {});
+    render(r.state);
+    m.textContent = r.detail;
+    m.className = "msg " + (r.ok ? "ok" : "err");
+  } catch (e) { m.textContent = e.message; m.className = "msg err"; }
+};
+$("risk-reconcile").onclick = async () => {
+  const r = await api("/api/reconcile", {});
+  render(r.state);
+  const m = $("risk-msg");
+  m.textContent = "Forced a fresh discovery pass.";
+  m.className = "msg ok";
+};
+
+$("arm-a-btn").onclick = async () => {
+  const m = $("arm-msg");
+  try {
+    const r = await api("/api/arm/step-a", {phrase: $("arm-a").value});
+    render(r.state);
+    if (r.ok) { m.textContent = "Step 1 confirmed. You have 5 minutes to complete step 2."; m.className = "msg ok"; }
+    else { m.textContent = r.error; m.className = "msg err"; }
+  } catch (e) { m.textContent = e.message; m.className = "msg err"; }
+};
+$("arm-b-btn").onclick = async () => {
+  const m = $("arm-msg");
+  try {
+    const r = await api("/api/arm/step-b", {phrase: $("arm-b").value});
+    render(r.state);
+    if (r.ok) { m.textContent = "Armed."; m.className = "msg ok"; }
+    else { m.textContent = r.error; m.className = "msg err"; }
+  } catch (e) { m.textContent = e.message; m.className = "msg err"; }
+};
+$("arm-disarm").onclick = async () => {
+  render(await api("/api/arm/disarm", {}));
+  $("arm-a").value = ""; $("arm-b").value = "";
+  $("arm-msg").textContent = "Disarmed."; $("arm-msg").className = "msg";
+};
+
+/* ---------------- Connect tab ---------------- */
+$("conn-submit").onclick = async () => {
+  const m = $("conn-msg");
+  m.textContent = "connecting…"; m.className = "msg";
+  try {
+    const r = await api("/api/connect", {
+      key_id: $("conn-keyid").value,
+      private_key_pem: $("conn-pem").value,
+    });
+    render(r.state);
+    if (r.ok) {
+      m.textContent = `Connected ${r.key_id} (fingerprint ${r.fingerprint}).`;
+      m.className = "msg ok";
+      $("conn-pem").value = "";
+    } else {
+      m.textContent = r.error; m.className = "msg err";
+    }
+  } catch (e) { m.textContent = e.message; m.className = "msg err"; }
+};
 
 poll();
 setInterval(poll, 1000);

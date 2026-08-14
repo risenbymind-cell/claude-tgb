@@ -230,6 +230,13 @@ class DeskServer:
                         {"error": "kill switch is engaged"}, "409 Conflict"
                     )
                 self.desk.enabled = want
+                self.desk.log_audit("operator", "trading", {"enabled": want})
+                return _json(self.desk.snapshot())
+
+            if path == "/api/shadow":
+                want = bool(payload.get("enabled"))
+                self.desk.shadow = want
+                self.desk.log_audit("operator", "shadow", {"enabled": want})
                 return _json(self.desk.snapshot())
 
             if path == "/api/strategy":
@@ -239,13 +246,18 @@ class DeskServer:
                 if name not in strategy_names():
                     return _json({"error": f"unknown strategy {name!r}"}, "400 Bad Request")
                 self.desk.strategy = name
+                self.desk.log_audit("operator", "strategy", {"strategy": name})
                 return _json(self.desk.snapshot())
 
             if path == "/api/settings":
+                detail = {}
                 if "size" in payload:
                     self.desk.size = max(1, min(500, int(payload["size"])))
+                    detail["size"] = self.desk.size
                 if "target_c" in payload:
                     self.desk.target_c = max(1, min(90, int(payload["target_c"])))
+                    detail["target_c"] = self.desk.target_c
+                self.desk.log_audit("operator", "settings", detail)
                 return _json(self.desk.snapshot())
 
             if path == "/api/kill":
@@ -254,15 +266,48 @@ class DeskServer:
                     source="desk",
                 )
                 self.desk.enabled = False
+                self.desk.log_audit("operator", "kill", {
+                    "reason": str(payload.get("reason") or "stopped from the desk"),
+                })
                 return _json(self.desk.snapshot())
 
             if path == "/api/resume":
                 self.desk.kill.release()
+                self.desk.log_audit("operator", "resume", {})
                 return _json(self.desk.snapshot())
 
             if path == "/api/reset":
                 self.desk.positions.clear()
                 self.desk._taken.clear()
+                self.desk.log_audit("operator", "reset", {})
                 return _json(self.desk.snapshot())
+
+            if path == "/api/arm/step-a":
+                result = self.desk.arm_step_a(str(payload.get("phrase", "")))
+                return _json({**result, "state": self.desk.snapshot()})
+
+            if path == "/api/arm/step-b":
+                result = self.desk.arm_step_b(str(payload.get("phrase", "")))
+                return _json({**result, "state": self.desk.snapshot()})
+
+            if path == "/api/arm/disarm":
+                self.desk.disarm()
+                return _json(self.desk.snapshot())
+
+            if path == "/api/connect":
+                result = self.desk.connect_keys(
+                    str(payload.get("key_id", "")),
+                    str(payload.get("private_key_pem", "")),
+                )
+                status = "200 OK" if result.get("ok") else "400 Bad Request"
+                return _json({**result, "state": self.desk.snapshot()}, status)
+
+            if path == "/api/health":
+                result = await self.desk.health()
+                return _json({**result, "state": self.desk.snapshot()})
+
+            if path == "/api/reconcile":
+                result = self.desk.reconcile()
+                return _json({**result, "state": self.desk.snapshot()})
 
         return _json({"error": "not found"}, "404 Not Found")

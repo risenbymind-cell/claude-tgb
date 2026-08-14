@@ -136,6 +136,12 @@ class Settings:
     master_key: str
     db_path: Path
     demo: bool
+    #: True when no MASTER_KEY was configured and one was generated in memory
+    #: for this process only -- anything encrypted under it (a connected
+    #: Kalshi key, for instance) becomes unreadable the moment the process
+    #: exits. Surfaced so a UI that lets someone paste credentials can warn
+    #: before they do, rather than after a restart destroys them.
+    master_key_is_ephemeral: bool = False
     #: The single authority on where orders go and which host is used.
     mode: TradingMode = TradingMode.PAPER
     series: dict[str, str] = field(default_factory=dict)
@@ -276,6 +282,7 @@ def load_settings(*, require_bot: bool = True) -> Settings:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is required")
 
     master_key = os.getenv("MASTER_KEY", "").strip()
+    master_key_is_ephemeral = not master_key
     if not master_key:
         if require_bot:
             raise RuntimeError(
@@ -324,6 +331,7 @@ def load_settings(*, require_bot: bool = True) -> Settings:
         telegram_token=token,
         admin_ids=admins,
         master_key=master_key,
+        master_key_is_ephemeral=master_key_is_ephemeral,
         db_path=Path(os.getenv("DB_PATH", str(ROOT / "data" / "kbot.sqlite3"))),
         demo=mode.uses_demo_host,
         mode=mode,

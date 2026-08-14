@@ -15,22 +15,45 @@ feature; it is the only shape that works.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
+import secrets
 import time
+from collections import deque
 from dataclasses import dataclass, field
 
 import httpx
 
 from ..config import Settings
 from ..kalshi.auth import InvalidPrivateKey, Signer
+from ..kalshi.fees import fee_dc
 from ..kalshi.rest import KalshiClient
 from ..kalshi.session import SessionStats
 from ..kalshi.ws import BookHistory, MarketFeed
-from ..safety import KillSwitch, TradingMode
+from ..safety import KillSwitch, TradingMode, measure_clock_drift
 from ..strategy import MarketContext, Signal, get_strategy, strategy_names
 from ..engine.discovery import MarketDiscovery
 
 log = logging.getLogger(__name__)
+
+AUDIT_MAXLEN = 500
+DECISIONS_MAXLEN = 300
+
+#: Two distinct typed phrases so arming cannot happen by holding one key or
+#: pasting one clipboard entry twice. Neither phrase alone can move production
+#: money -- the real gate is still TRADING_MODE + ALLOW_PRODUCTION_ORDERS on
+#: the process that started this desk (see kbot.safety.resolve_mode). This UI
+#: flow exposes that gate; it cannot widen it.
+PRODUCTION_ACK_A = "I UNDERSTAND THIS TRADES REAL MONEY"
+PRODUCTION_ACK_B = "ENABLE PRODUCTION LIVE"
+ARM_WINDOW_S = 300.0
+
+
+def _mask(key_id: str) -> str:
+    if len(key_id) <= 8:
+        return "*" * len(key_id)
+    return key_id[:4] + "…" + key_id[-4:]
 
 
 @dataclass
@@ -49,6 +72,13 @@ class PaperPosition:
     exit_fee_dc: int = 0
     closed_at: float | None = None
     outcome: str = "open"
+    #: A locally generated identifier, not an exchange order ID -- this desk
+    #: never places a real order, so there is no exchange-assigned ID to show.
+    #: Kept in the same shape a live client_order_id would take so the ledger
+    #: column reads the same way once real order routing exists.
+    client_order_id: str = field(
+        default_factory=lambda: f"paper-{secrets.token_hex(4)}"
+    )
 
     @property
     def net_dc(self) -> int:
@@ -68,10 +98,24 @@ class MarketView:
     yes_ask: int | None
     no_ask: int | None
     depth: float
+    #: Resting size on each side at the top levels, split out from `depth` so
+    #: order-book imbalance can be shown rather than just total liquidity.
+    yes_depth: float
+    no_depth: float
+    #: (yes_depth - no_depth) / total, in [-1, 1]. Positive means more resting
+    #: size wants to buy YES than NO.
+    imbalance: float | None
     vwap_dc: float | None
     range_dc: float | None
     extension: float | None
     velocity_dc: float | None
+    #: Fair-value change over the last 20s, in deci-cents -- the same window
+    #: the strategies themselves read as `fv_change_20s`.
+    mom20_dc: float | None
+    #: Round-trip fee (open + close) for the desk's *currently configured*
+    #: size at the current ask, in deci-cents. What the mid would have to move
+    #: past before a scalp at this size is worth anything.
+    rt_fee_dc: int | None
     book_age_s: float
     #: (seconds_to_close, mid_dc, vwap_dc) sampled across the window, for the
     #: chart. Held here rather than recomputed in the browser so the line the
@@ -117,6 +161,24 @@ class Desk:
         self.last_refresh: float = 0.0
         self.started_at = time.time()
 
+        #: When true, the selected strategy's signals are logged as decisions
+        #: exactly as normal but never opened as a position -- for watching
+        #: what a strategy *would* do without it acting.
+        self.shadow = False
+        #: Cleared by a restart. Arming here can only ever expose the real
+        #: backend gate (mode + ALLOW_PRODUCTION_ORDERS at process start); it
+        #: never changes what that gate allows.
+        self.production_armed = False
+        self._armed_a_at: float | None = None
+        self.connected_key_id: str | None = None
+        self._last_clock_check: dict | None = None
+
+        #: Every command, kill, arming step and boot -- newest first, capped.
+        self.audit: deque[dict] = deque(maxlen=AUDIT_MAXLEN)
+        #: One entry per market per pass for the *selected* strategy, fired or
+        #: not -- this is what makes "why didn't it trade" answerable.
+        self.decisions: deque[dict] = deque(maxlen=DECISIONS_MAXLEN)
+
         #: One entry per market window, so a strategy cannot re-enter the same
         #: window every pass.
         self._taken: set[tuple[str, str]] = set()
@@ -132,6 +194,18 @@ class Desk:
     def start(self) -> None:
         self.feed.start()
         self._task = asyncio.create_task(self._loop())
+        self.log_audit("system", "engine_boot", {
+            "mode": self.settings.mode.value,
+            "coins": self.settings.coins,
+        })
+
+    # ---------------- audit ----------------
+
+    def log_audit(self, actor: str, action: str, detail: dict | None = None) -> None:
+        self.audit.appendleft({
+            "ts": time.time(), "actor": actor, "action": action,
+            "detail": detail or {},
+        })
 
     async def stop(self) -> None:
         if self._task:
@@ -204,6 +278,10 @@ class Desk:
                 # only matters if a market runs long.
                 self._series[market.ticker] = (market.open_time, points[-500:])
 
+            yes_depth = book.depth("yes")
+            no_depth = book.depth("no")
+            total_depth = yes_depth + no_depth
+            rt_ask = book.yes_ask if book.yes_ask is not None else book.no_ask
             view = MarketView(
                 coin=coin,
                 ticker=market.ticker,
@@ -212,7 +290,13 @@ class Desk:
                 spread_dc=book.spread,
                 yes_ask=book.yes_ask,
                 no_ask=book.no_ask,
-                depth=book.depth("yes") + book.depth("no"),
+                depth=total_depth,
+                yes_depth=yes_depth,
+                no_depth=no_depth,
+                imbalance=(
+                    None if total_depth <= 0
+                    else (yes_depth - no_depth) / total_depth
+                ),
                 vwap_dc=self.session.vwap(market.ticker),
                 range_dc=self.session.range_dc(market.ticker),
                 extension=(
@@ -220,6 +304,11 @@ class Desk:
                     else self.session.extension(market.ticker, float(mid))
                 ),
                 velocity_dc=self.session.velocity_dc(market.ticker, now),
+                mom20_dc=self.history.change_over(market.ticker, 20),
+                rt_fee_dc=(
+                    None if rt_ask is None
+                    else fee_dc(self.size, rt_ask) * 2
+                ),
                 book_age_s=book.age(),
                 history=self._series.get(market.ticker, (0.0, []))[1],
                 yes_levels=sorted(book.yes.items(), reverse=True)[:6],
@@ -259,6 +348,23 @@ class Desk:
                     )
                     if name == self.strategy:
                         self._maybe_open(view, signal, now)
+                # Only the selected strategy's non-fires are logged as
+                # decisions -- logging every strategy's every pass would be
+                # ~4x the volume for signals nobody is trading on.
+                if name == self.strategy:
+                    self.decisions.appendleft({
+                        "ts": now, "coin": coin, "ticker": market.ticker,
+                        "strategy": name,
+                        "fired": signal is not None,
+                        "side": None if signal is None else signal.side,
+                        "confidence": (
+                            None if signal is None else round(signal.confidence, 3)
+                        ),
+                        "reason": signal.reason if signal is not None else "no_signal",
+                        "extension": view.extension,
+                        "velocity_dc": view.velocity_dc,
+                        "seconds_to_close": round(view.seconds_to_close),
+                    })
 
             views[market.ticker] = view
 
@@ -268,8 +374,6 @@ class Desk:
     # ---------------- paper trading ----------------
 
     def _maybe_open(self, view: MarketView, signal: Signal, now: float) -> None:
-        from ..kalshi.fees import fee_dc
-
         if not self.enabled or self.kill.engaged:
             return
         key = (self.strategy, view.ticker)
@@ -287,6 +391,14 @@ class Desk:
             return
 
         self._taken.add(key)
+        if self.shadow:
+            # Observe without acting: the signal still claims the window (so
+            # it is not re-logged every pass) but no position is opened.
+            self.log_audit("engine", "shadow_signal", {
+                "coin": view.coin, "ticker": view.ticker, "side": signal.side,
+                "confidence": round(signal.confidence, 3), "reason": signal.reason,
+            })
+            return
         self.positions.append(
             PaperPosition(
                 coin=view.coin, ticker=view.ticker, side=signal.side,
@@ -298,8 +410,6 @@ class Desk:
         )
 
     def _manage(self, now: float) -> None:
-        from ..kalshi.fees import fee_dc
-
         for pos in self.positions:
             if pos.outcome != "open":
                 continue
@@ -323,6 +433,114 @@ class Desk:
                 pos.outcome = "flattened"
                 pos.closed_at = now
 
+    # ---------------- production arming ----------------
+    #
+    # Two independent typed phrases, mirroring the two independent
+    # environment variables the process itself was started with
+    # (TRADING_MODE=production-live and ALLOW_PRODUCTION_ORDERS=<ack>). This
+    # UI flow can only *expose* that gate -- step B fails outright unless the
+    # process is already running in production-live mode, because arming a
+    # dashboard cannot change what host and credentials this process holds.
+
+    def arm_step_a(self, phrase: str) -> dict:
+        if phrase != PRODUCTION_ACK_A:
+            self.log_audit("operator", "arm_step_a_rejected", {})
+            return {"ok": False, "error": "phrase does not match"}
+        self._armed_a_at = time.time()
+        self.log_audit("operator", "arm_step_a", {})
+        return {"ok": True}
+
+    def arm_step_b(self, phrase: str) -> dict:
+        if self._armed_a_at is None or time.time() - self._armed_a_at > ARM_WINDOW_S:
+            self._armed_a_at = None
+            return {"ok": False, "error": "step one has expired or was not completed"}
+        if phrase != PRODUCTION_ACK_B:
+            self.log_audit("operator", "arm_step_b_rejected", {})
+            return {"ok": False, "error": "phrase does not match"}
+        if not self.settings.mode.risks_real_money:
+            self._armed_a_at = None
+            self.log_audit("operator", "arm_step_b_rejected", {
+                "reason": f"process is running in {self.settings.mode.value} mode",
+            })
+            return {
+                "ok": False,
+                "error": (
+                    f"This process was started in {self.settings.mode.value} "
+                    "mode. Arming the desk cannot change that -- restart it "
+                    "with TRADING_MODE=production-live and "
+                    "ALLOW_PRODUCTION_ORDERS set to place real orders."
+                ),
+            }
+        self.production_armed = True
+        self._armed_a_at = None
+        self.log_audit("operator", "arm_step_b", {})
+        return {"ok": True}
+
+    def disarm(self) -> None:
+        self.production_armed = False
+        self._armed_a_at = None
+        self.log_audit("operator", "disarm", {})
+
+    # ---------------- credentials ----------------
+
+    def connect_keys(self, key_id: str, private_key_pem: str) -> dict:
+        key_id = key_id.strip()
+        pem = private_key_pem.strip()
+        if not key_id or not pem:
+            return {"ok": False, "error": "key id and private key are both required"}
+        try:
+            signer = Signer.from_pem(key_id, pem)
+        except InvalidPrivateKey as exc:
+            self.log_audit("operator", "connect_rejected", {"error": str(exc)[:200]})
+            return {"ok": False, "error": f"private key unusable: {exc}"}
+
+        from cryptography.fernet import Fernet
+
+        fernet = Fernet(self.settings.master_key.encode())
+        encrypted = fernet.encrypt(
+            json.dumps({"key_id": key_id, "pem": pem}).encode()
+        )
+        path = self.settings.db_path.parent / "desk_key.enc"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(encrypted)
+
+        self._signer = signer
+        self.rest = KalshiClient(self.settings.rest_base, signer=signer, client=self._http)
+        self.discovery = MarketDiscovery(self.rest, self.settings.series)
+        self.feed = MarketFeed(
+            self.settings.ws_url, self.rest, signer,
+            poll_interval=self.settings.orderbook_poll_interval_s,
+        )
+        if self._task is not None:
+            self.feed.start()
+
+        fingerprint = hashlib.sha256(pem.encode()).hexdigest()[:12]
+        self.connected_key_id = key_id
+        self.log_audit("operator", "connect", {
+            "key_id": _mask(key_id), "fingerprint": fingerprint,
+            "host": self.settings.rest_base,
+        })
+        return {"ok": True, "key_id": _mask(key_id), "fingerprint": fingerprint}
+
+    # ---------------- health / reconcile ----------------
+
+    async def health(self) -> dict:
+        check = await measure_clock_drift(self.settings.rest_base, client=self._http)
+        self._last_clock_check = {
+            "ok": check.ok, "drift_s": check.drift_s, "detail": check.detail,
+        }
+        self.log_audit("operator", "health_check", self._last_clock_check)
+        return self._last_clock_check
+
+    def reconcile(self) -> dict:
+        # There is no live broker wired yet (see connect_keys/production
+        # arming above) so there are no exchange-side orders to reconcile
+        # against -- this forces the next pass to re-run discovery from
+        # scratch, which is the honest version of "reconcile" available today.
+        self.last_refresh = 0.0
+        self.log_audit("operator", "reconcile", {})
+        return {"ok": True}
+
     # ---------------- serialisation ----------------
 
     def snapshot(self) -> dict:
@@ -330,6 +548,10 @@ class Desk:
         net = sum(p.net_dc for p in closed)
         wins = sum(1 for p in closed if p.net_dc > 0)
         kill = self.kill.state()
+        armed_a = (
+            self._armed_a_at is not None
+            and time.time() - self._armed_a_at <= ARM_WINDOW_S
+        )
         return {
             "mode": self.settings.mode.value,
             "mode_label": self.settings.mode.label,
@@ -337,6 +559,7 @@ class Desk:
             "places_real_orders": self.settings.places_real_orders,
             "risks_real_money": self.settings.risks_real_money,
             "enabled": self.enabled,
+            "shadow": self.shadow,
             "strategy": self.strategy,
             "strategies": strategy_names(),
             "size": self.size,
@@ -345,6 +568,27 @@ class Desk:
             "feed": "websocket" if self.feed.connected else "REST polling",
             "error": self.error,
             "uptime_s": round(time.time() - self.started_at),
+            "live_posture": {
+                "mode": self.settings.mode.value,
+                "mode_label": self.settings.mode.label,
+                "places_real_orders": self.settings.places_real_orders,
+                "risks_real_money": self.settings.risks_real_money,
+                "why": (
+                    "This desk still only ever simulates fills -- no order "
+                    "path to the exchange is wired yet, in any mode."
+                ),
+                "feed": "websocket" if self.feed.connected else "REST polling",
+                "clock": self._last_clock_check,
+                "keys_connected": self.connected_key_id is not None,
+                "connected_key_id": (
+                    _mask(self.connected_key_id) if self.connected_key_id else None
+                ),
+                "production_armed": self.production_armed,
+                "armed_step_a": armed_a,
+                "master_key_is_ephemeral": self.settings.master_key_is_ephemeral,
+            },
+            "audit": list(self.audit)[:150],
+            "decisions": list(self.decisions)[:150],
             "markets": [
                 {
                     "coin": v.coin, "ticker": v.ticker,
@@ -353,12 +597,17 @@ class Desk:
                     "spread_dc": v.spread_dc,
                     "yes_ask": v.yes_ask, "no_ask": v.no_ask,
                     "depth": round(v.depth),
+                    "yes_depth": round(v.yes_depth),
+                    "no_depth": round(v.no_depth),
+                    "imbalance": None if v.imbalance is None else round(v.imbalance, 3),
                     "vwap_dc": None if v.vwap_dc is None else round(v.vwap_dc, 1),
                     "range_dc": None if v.range_dc is None else round(v.range_dc, 1),
                     "extension": None if v.extension is None else round(v.extension, 3),
                     "velocity_dc": (
                         None if v.velocity_dc is None else round(v.velocity_dc, 1)
                     ),
+                    "mom20_dc": None if v.mom20_dc is None else round(v.mom20_dc, 1),
+                    "rt_fee_dc": v.rt_fee_dc,
                     "book_age_s": round(v.book_age_s, 1),
                     "history": [
                         [round(s), round(m, 1), None if w is None else round(w, 1)]
@@ -376,7 +625,7 @@ class Desk:
                     "count": p.count, "entry_dc": p.entry_dc,
                     "target_dc": p.target_dc, "exit_dc": p.exit_dc,
                     "outcome": p.outcome, "strategy": p.strategy,
-                    "reason": p.reason,
+                    "reason": p.reason, "client_order_id": p.client_order_id,
                     "fees_dc": p.entry_fee_dc + p.exit_fee_dc,
                     "net_dc": p.net_dc,
                     "age_s": round((p.closed_at or time.time()) - p.opened_at),
