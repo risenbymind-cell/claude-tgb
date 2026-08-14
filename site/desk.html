@@ -418,7 +418,7 @@ footer p{max-width:80ch}
         <th>Coin</th><th>Side</th><th class="num">Size</th>
         <th class="num">Entry</th><th class="num">Target</th><th class="num">Exit</th>
         <th class="num">Fees</th><th class="num">Net</th>
-        <th class="num">Age</th><th>Outcome</th><th>CLID</th><th>Why</th>
+        <th class="num">Age</th><th>Outcome</th><th>Venue</th><th>CLID</th><th>Why</th>
       </tr></thead>
       <tbody id="trades"></tbody>
     </table>
@@ -428,15 +428,18 @@ footer p{max-width:80ch}
   </div>
 
   <footer>
-    <p><b>Simulated fills.</b> Entries lift the recorded ask capped by resting size;
-    exits fill only when the bid actually reaches the target, and open positions are
-    flattened 45s before expiry rather than carried into a settlement. P&amp;L is net
-    of Kalshi's real fee on both legs.</p>
+    <p><b>Venue says which is which.</b> A <i>paper</i> row was filled by the simulator:
+    entries lift the recorded ask capped by resting size, exits fill only when the bid
+    actually reaches the target. A <i>live</i> row was filled by Kalshi — its CLID is the
+    real exchange order ID, and its entry price and fee are what the exchange reported,
+    not estimates.</p>
+    <p>Open positions are flattened 45s before expiry rather than carried into a
+    settlement. P&amp;L is net of Kalshi's fee on both legs. A live position whose exit
+    is refused stays <b>open</b> and is marked "exit failed" — it is not written off,
+    because the contracts are still on the exchange until it says otherwise.</p>
     <p>No edge has been demonstrated for any strategy here. Read the net column,
     not the win rate — small targets can win nine times in ten and still lose money,
-    because the fee is charged twice. CLID is a locally generated identifier for the
-    simulated trade, not an exchange order ID — no live order has ever been placed by
-    this build.</p>
+    because the fee is charged twice.</p>
   </footer>
 </section>
 
@@ -454,8 +457,8 @@ footer p{max-width:80ch}
     <p class="hint" style="margin-top:12px">
       <b>Shadow</b> lets the selected strategy fire and log signals exactly as normal, without opening
       a position — for watching what it would do before letting it act.
-      <b>Reconcile</b> forces a fresh discovery pass; there is no live broker wired yet, so there is
-      nothing exchange-side to reconcile against beyond that.
+      <b>Reconcile</b> compares the positions this desk thinks it holds against what Kalshi actually
+      reports, and names every divergence; in paper mode there is nothing to compare, and it says so.
       <b>Check clock</b> compares this machine's clock to Kalshi's, the same check the bot runs at boot.
     </p>
     <div class="msg" id="risk-msg"></div>
@@ -463,12 +466,12 @@ footer p{max-width:80ch}
 
   <h2>Production arming</h2>
   <div class="panel panel-pad">
-    <p class="hint">This UI flow can only <b>expose</b> the backend's real gate — it cannot widen it.
-      Real orders require the process itself to have been started with
-      <code class="mono">TRADING_MODE=production-live</code> and
-      <code class="mono">ALLOW_PRODUCTION_ORDERS</code> set. Arming here does not change that, and this
-      build has no order path wired to the exchange in any mode yet — arming is the honest UI for a gate
-      that exists, not a claim that live orders will be sent.</p>
+    <p class="hint">Arming is required before this desk will send a <b>production</b> order, and it is
+      cleared on every restart. It cannot widen the backend's gate: real orders also require the process
+      itself to have been started with <code class="mono">TRADING_MODE=production-live</code> and
+      <code class="mono">ALLOW_PRODUCTION_ORDERS</code> set, and step 2 below refuses outright when it
+      was not. <b>Demo-live needs no arming</b> — demo funds are not money, and a ceremony there would
+      only train you to click through the one that guards real money.</p>
     <div class="arm-step" id="arm-a-box">
       <label for="arm-a">Step 1 — type exactly: I UNDERSTAND THIS TRADES REAL MONEY</label>
       <input type="text" id="arm-a" autocomplete="off" spellcheck="false">
@@ -637,9 +640,15 @@ function render(s) {
   $("c-feed").textContent = s.feed;
   $("c-circuit").textContent = s.kill.engaged ? "CIRCUIT: OPEN" : "CIRCUIT: CLOSED";
   $("c-circuit").className = "chip " + (s.kill.engaged ? "hot" : "live");
-  const armedLabel = s.live_posture.production_armed ? "ARMED" : s.shadow ? "SHADOW" : "PAPER";
+  // What would actually happen if a signal fired right now.
+  const lpc = s.live_posture;
+  let armedLabel = "PAPER", armedClass = "";
+  if (s.shadow) { armedLabel = "SHADOW"; armedClass = "on"; }
+  else if (lpc.blocked) { armedLabel = "BLOCKED"; armedClass = "hot"; }
+  else if (lpc.risks_real_money) { armedLabel = "ARMED: REAL"; armedClass = "hot"; }
+  else if (lpc.places_real_orders) { armedLabel = "DEMO LIVE"; armedClass = "live"; }
   $("c-armed").textContent = armedLabel;
-  $("c-armed").className = "chip " + (s.live_posture.production_armed ? "hot" : s.shadow ? "on" : "");
+  $("c-armed").className = "chip " + armedClass;
 
   const b = $("banner");
   b.className = "banner " + (s.risks_real_money ? "real" : "paper");
@@ -681,6 +690,13 @@ function render(s) {
     : `<span class="badge no">not checked</span> run "Check clock" on the Risk tab`;
   $("posture").innerHTML = `
     <dt>Mode</dt><dd>${esc(lp.mode_label)}</dd>
+    <dt>Orders</dt><dd>${lp.blocked
+      ? `<span class="badge bad">blocked</span> ${esc(lp.blocked)}`
+      : lp.places_real_orders
+        ? `<span class="badge ${lp.risks_real_money ? "bad" : "ok"}">${lp.risks_real_money ? "REAL MONEY" : "demo funds"}</span> orders will reach Kalshi`
+        : `<span class="badge no">simulated</span> nothing is sent to Kalshi`}</dd>
+    ${lp.balance_dc === null ? "" :
+      `<dt>Balance</dt><dd>${money(lp.balance_dc)}</dd>`}
     <dt>Feed</dt><dd>${esc(lp.feed)}</dd>
     <dt>Clock sync</dt><dd>${clockRow}</dd>
     <dt>Keys</dt><dd>${lp.keys_connected
@@ -780,7 +796,10 @@ function renderLedger(s) {
       <td data-k="net" class="num ${t.net_dc >= 0 ? "pos" : "neg"}"><span class="card-label">Net</span>
         ${t.outcome === "open" ? "—" : "<b>" + money(t.net_dc) + "</b>"}</td>
       <td data-k="age" class="num dim"><span class="card-label">Age</span>${t.age_s}s</td>
-      <td data-k="outcome" class="${t.outcome === "open" ? "dim" : ""}"><span class="card-label">Outcome</span>${t.outcome}</td>
+      <td data-k="outcome" class="${t.outcome === "open" ? "dim" : ""}"><span class="card-label">Outcome</span>${t.outcome}${
+        t.exit_error ? ` <span class="badge bad" title="${esc(t.exit_error)}">exit failed</span>` : ""}</td>
+      <td data-k="venue"><span class="card-label">Venue</span>${t.live
+        ? '<span class="badge ok">live</span>' : '<span class="badge no">paper</span>'}</td>
       <td data-k="clid" class="dim mono"><span class="card-label">CLID</span>${esc(t.client_order_id)}</td>
       <td data-k="why" class="dim"><span class="card-label">Why</span>${esc(t.reason)}</td>
     </tr>`).join("");
@@ -988,11 +1007,14 @@ $("risk-health").onclick = async () => {
   } catch (e) { m.textContent = e.message; m.className = "msg err"; }
 };
 $("risk-reconcile").onclick = async () => {
-  const r = await api("/api/reconcile", {});
-  render(r.state);
   const m = $("risk-msg");
-  m.textContent = "Forced a fresh discovery pass.";
-  m.className = "msg ok";
+  m.textContent = "reconciling…"; m.className = "msg";
+  try {
+    const r = await api("/api/reconcile", {});
+    if (r.state) render(r.state);
+    m.textContent = r.ok ? r.detail : r.error;
+    m.className = "msg " + (r.ok && !(r.divergences || []).length ? "ok" : "err");
+  } catch (e) { m.textContent = e.message; m.className = "msg err"; }
 };
 
 $("arm-a-btn").onclick = async () => {

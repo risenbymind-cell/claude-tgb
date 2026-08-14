@@ -150,7 +150,7 @@ async def test_shadow_mode_logs_but_does_not_open_a_position(desk, monkeypatch):
         coin="BTC", ticker=view.ticker, side="yes",
         confidence=0.7, price_dc=510, reason="test_fire",
     )
-    desk._maybe_open(view, signal, 1000.0)
+    await desk._maybe_open(view, signal, 1000.0)
 
     assert desk.positions == []
     assert any(a["action"] == "shadow_signal" for a in desk.audit)
@@ -167,7 +167,7 @@ async def test_normal_mode_still_opens_a_position(desk, monkeypatch):
         coin="BTC", ticker=view.ticker, side="yes",
         confidence=0.7, price_dc=510, reason="test_fire",
     )
-    desk._maybe_open(view, signal, 1000.0)
+    await desk._maybe_open(view, signal, 1000.0)
 
     assert len(desk.positions) == 1
     assert desk.positions[0].client_order_id.startswith("paper-")
@@ -336,7 +336,7 @@ async def test_health_reports_clock_sync(desk):
 
 async def test_reconcile_forces_rediscovery_and_is_audited(desk):
     desk.last_refresh = 999999999.0
-    result = desk.reconcile()
+    result = await desk.reconcile()
     assert result["ok"] is True
     assert desk.last_refresh == 0.0
     assert desk.audit[0]["action"] == "reconcile"

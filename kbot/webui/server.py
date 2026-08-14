@@ -307,7 +307,7 @@ class DeskServer:
                 return _json({**result, "state": self.desk.snapshot()})
 
             if path == "/api/reconcile":
-                result = self.desk.reconcile()
+                result = await self.desk.reconcile()
                 return _json({**result, "state": self.desk.snapshot()})
 
         return _json({"error": "not found"}, "404 Not Found")
