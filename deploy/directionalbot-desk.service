@@ -1,0 +1,47 @@
+# The web desk as a systemd service.
+#
+#   sudo cp deploy/directionalbot-desk.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now directionalbot-desk
+#
+# Requires DESK_PASSWORD_HASH in /opt/directionalbot/.env — the desk refuses
+# to bind a non-loopback port without it. Generate one with:
+#   DESK_PASSWORD='<12+ chars>' python -m kbot.webui hash-password
+
+[Unit]
+Description=DirectionalBot web desk
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kbot
+WorkingDirectory=/opt/directionalbot
+EnvironmentFile=/opt/directionalbot/.env
+# Bound to loopback: Caddy terminates TLS and forwards. Binding 0.0.0.0 here
+# would put the port on every interface, including ones the firewall may not
+# cover.
+Environment=DESK_TRUST_PROXY=1
+ExecStart=/opt/directionalbot/.venv/bin/python -m kbot.webui --host 127.0.0.1 --port 8787
+
+# SIGTERM rather than SIGKILL, and enough time to finish an in-flight order
+# and flush the intent log before the process goes away.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=always
+RestartSec=5
+# Exit code 2 is a configuration error -- a missing password, a sandbox on a
+# live mode, an unreadable key. Restarting cannot fix any of them, so the
+# service stops and stays stopped where someone will notice, rather than
+# crash-looping quietly.
+RestartPreventExitStatus=2
+
+# The desk reads .env and writes only its data directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/directionalbot/data
+
+[Install]
+WantedBy=multi-user.target

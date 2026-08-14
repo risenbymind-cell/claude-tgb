@@ -53,6 +53,11 @@ PRODUCTION_ACK_A = "I UNDERSTAND THIS TRADES REAL MONEY"
 PRODUCTION_ACK_B = "ENABLE PRODUCTION LIVE"
 ARM_WINDOW_S = 300.0
 
+SANDBOX_REFUSAL = (
+    "This is a sandbox instance. It has no credentials, cannot connect any, "
+    "and cannot place an order on any exchange."
+)
+
 
 def _mask(key_id: str) -> str:
     if len(key_id) <= 8:
@@ -145,13 +150,43 @@ class MarketView:
     signals: list[dict] = field(default_factory=list)
 
 
-class Desk:
-    """One process-wide view of the live markets, refreshed on a timer."""
+class SandboxLocked(RuntimeError):
+    """Attempted to reach past the sandbox boundary."""
 
-    def __init__(self, settings: Settings, *, size: int = 10, target_c: int = 15):
+
+class Desk:
+    """One process-wide view of the live markets, refreshed on a timer.
+
+    `sandbox=True` is the mode for a publicly reachable demo. It is not a
+    softer setting than paper -- it is paper with the exits welded shut. The
+    difference matters because paper mode is one POST away from being
+    something else: the desk exposes routes that connect credentials and arm
+    production, and a public instance is reachable by people who are not the
+    operator. In sandbox, those routes refuse rather than being merely hidden
+    in the UI, because hiding a control is not the same as removing it.
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        size: int = 10,
+        target_c: int = 15,
+        sandbox: bool = False,
+    ):
         self.settings = settings
         self.size = size
         self.target_c = target_c
+        self.sandbox = sandbox
+        if sandbox and settings.mode.places_real_orders:
+            # Refused rather than silently downgraded: an operator who set
+            # both has contradictory intentions, and guessing which one they
+            # meant is how a demo ends up spending money.
+            raise SandboxLocked(
+                f"Sandbox mode cannot run with TRADING_MODE="
+                f"{settings.mode.value}. A sandbox never places orders; set "
+                "TRADING_MODE=paper or drop --sandbox."
+            )
         self.kill = KillSwitch(path=settings.kill_file)
 
         self._http = httpx.AsyncClient(timeout=10.0)
@@ -238,6 +273,8 @@ class Desk:
         """
         if self.kill.engaged:
             return "kill switch engaged"
+        if self.sandbox:
+            return None  # sandbox: not blocked, just permanently simulated
         if not self.settings.mode.places_real_orders:
             return None  # paper: not blocked, just simulated
         if self._signer is None:
@@ -259,7 +296,15 @@ class Desk:
         window is between the exchange accepting an order and this process
         writing down that it did.
         """
-        live = self.settings.mode.places_real_orders and self._signer is not None
+        # The last line of defence. Every route into a live broker is already
+        # closed in sandbox; this makes it structurally impossible rather than
+        # merely unreached, so a future route added without thinking about the
+        # sandbox still cannot produce one.
+        live = (
+            not self.sandbox
+            and self.settings.mode.places_real_orders
+            and self._signer is not None
+        )
         key = (live, self.connected_key_id, self.settings.mode.value)
         if self._broker is not None and self._broker_key == key:
             return self._broker
@@ -623,6 +668,8 @@ class Desk:
     # dashboard cannot change what host and credentials this process holds.
 
     def arm_step_a(self, phrase: str) -> dict:
+        if self.sandbox:
+            return {"ok": False, "error": SANDBOX_REFUSAL}
         if phrase != PRODUCTION_ACK_A:
             self.log_audit("operator", "arm_step_a_rejected", {})
             return {"ok": False, "error": "phrase does not match"}
@@ -631,6 +678,8 @@ class Desk:
         return {"ok": True}
 
     def arm_step_b(self, phrase: str) -> dict:
+        if self.sandbox:
+            return {"ok": False, "error": SANDBOX_REFUSAL}
         if self._armed_a_at is None or time.time() - self._armed_a_at > ARM_WINDOW_S:
             self._armed_a_at = None
             return {"ok": False, "error": "step one has expired or was not completed"}
@@ -664,6 +713,12 @@ class Desk:
     # ---------------- credentials ----------------
 
     def connect_keys(self, key_id: str, private_key_pem: str) -> dict:
+        if self.sandbox:
+            # A public demo must not become a place people paste private keys.
+            # Refusing before parsing means the key is never even loaded into
+            # a cryptography object, let alone written anywhere.
+            self.log_audit("operator", "connect_refused_sandbox", {})
+            return {"ok": False, "error": SANDBOX_REFUSAL}
         key_id = key_id.strip()
         pem = private_key_pem.strip()
         if not key_id or not pem:
@@ -799,6 +854,11 @@ class Desk:
     def _posture_why(self) -> str:
         """One sentence on what would actually happen if a signal fired now."""
         blocked = self.blocked_reason()
+        if self.sandbox:
+            return (
+                "Sandbox: real Kalshi market data, simulated fills. This "
+                "instance holds no credentials and cannot place an order."
+            )
         if self.shadow:
             return "Shadow mode: signals are logged, no orders are sent."
         if not self.settings.mode.places_real_orders:
@@ -833,6 +893,7 @@ class Desk:
             "risks_real_money": self.settings.risks_real_money,
             "enabled": self.enabled,
             "shadow": self.shadow,
+            "sandbox": self.sandbox,
             "strategy": self.strategy,
             "strategies": strategy_names(),
             "size": self.size,
@@ -857,6 +918,7 @@ class Desk:
                 ),
                 "production_armed": self.production_armed,
                 "armed_step_a": armed_a,
+                "sandbox": self.sandbox,
                 "master_key_is_ephemeral": self.settings.master_key_is_ephemeral,
             },
             "audit": list(self.audit)[:150],

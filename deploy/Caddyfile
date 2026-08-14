@@ -1,4 +1,4 @@
-# Caddy reverse proxy — terminates TLS and forwards payment callbacks.
+# Caddy reverse proxy — terminates TLS and forwards to the bot and the desk.
 # Caddy provisions and renews the certificate automatically.
 #
 #   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
@@ -6,6 +6,7 @@
 #
 # Then set in .env:
 #   PAYMENT_CALLBACK_URL=https://yourdomain.com/webhook/payment
+#   DESK_TRUST_PROXY=1
 
 yourdomain.com {
     encode gzip
@@ -24,3 +25,48 @@ yourdomain.com {
         Referrer-Policy "strict-origin-when-cross-origin"
     }
 }
+
+# The trading desk, on its own hostname.
+#
+# Its own name rather than a path prefix on the main site, for two reasons
+# that both matter: the desk sets cookies scoped to the host, and a cookie on
+# the apex would be sent to every other path there; and the desk's own
+# Content-Security-Policy is far stricter than a marketing page can use.
+#
+# The desk requires a password (DESK_PASSWORD_HASH) before it will bind a
+# non-loopback port at all, so this proxy is not the only thing guarding it —
+# but it is what provides TLS, and without TLS the password crosses the
+# network in the clear.
+desk.yourdomain.com {
+    encode gzip
+    reverse_proxy 127.0.0.1:8787 {
+        # The desk reads these only when DESK_TRUST_PROXY=1, so a forged
+        # header from a client cannot spoof an address or fake HTTPS.
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-For {remote_host}
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        # The desk is a control surface for something that spends money.
+        # Nothing about it should ever appear in a referrer or a search index.
+        Referrer-Policy "no-referrer"
+        X-Robots-Tag "noindex, nofollow"
+    }
+}
+
+# A public sandbox, if you run one. No password by design: it holds no
+# credentials, refuses to accept any, and has no order path.
+#
+# sandbox.yourdomain.com {
+#     encode gzip
+#     reverse_proxy 127.0.0.1:8788 {
+#         header_up X-Forwarded-Proto {scheme}
+#         header_up X-Forwarded-For {remote_host}
+#     }
+#     header {
+#         Strict-Transport-Security "max-age=31536000; includeSubDomains"
+#         X-Content-Type-Options "nosniff"
+#     }
+# }

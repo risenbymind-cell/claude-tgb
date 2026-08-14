@@ -59,6 +59,8 @@ header{border-bottom:1px solid var(--rule);background:var(--surface);position:st
 .chip{font:500 10px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;
   border:1px solid var(--rule);border-radius:4px;padding:6px 9px;color:var(--ink-2);white-space:nowrap}
 .chip.on{border-color:var(--accent);color:var(--accent)}
+button.chip.signout{background:transparent;cursor:pointer}
+button.chip.signout:hover{border-color:var(--accent);color:var(--accent);background:transparent}
 .chip.hot{border-color:var(--down);color:var(--down)}
 .chip.live{border-color:var(--up);color:var(--up)}
 
@@ -293,6 +295,8 @@ footer p{max-width:80ch}
     <span class="chip" id="c-mode">—</span>
     <span class="chip" id="c-feed">—</span>
     <span class="chip" id="c-conn">connecting…</span>
+    <span class="chip on" id="c-sandbox" hidden>SANDBOX</span>
+    <button class="chip signout" id="c-signout" hidden>Sign out</button>
   </div>
   <nav class="tabs" role="tablist">
     <button class="tab-btn" data-tab="desk" role="tab">Desk</button>
@@ -465,7 +469,7 @@ footer p{max-width:80ch}
   </div>
 
   <h2>Production arming</h2>
-  <div class="panel panel-pad">
+  <div class="panel panel-pad" id="arm-panel">
     <p class="hint">Arming is required before this desk will send a <b>production</b> order, and it is
       cleared on every restart. It cannot widen the backend's gate: real orders also require the process
       itself to have been started with <code class="mono">TRADING_MODE=production-live</code> and
@@ -493,7 +497,13 @@ footer p{max-width:80ch}
 <section class="tabpanel" id="tab-connect">
   <h2>Connect Kalshi keys</h2>
   <div class="warn-box" id="connect-warn">Checking MASTER_KEY strength…</div>
-  <div class="panel panel-pad">
+  <div class="panel panel-pad" id="sandbox-note" hidden>
+    <p class="hint" style="margin:0">Nothing to connect here. This instance runs as a
+    sandbox: it reads Kalshi's public market data, simulates every fill, and has no
+    order path to any exchange. Run it yourself without <code class="mono">--sandbox</code>
+    to connect your own keys.</p>
+  </div>
+  <div class="panel panel-pad" id="connect-form">
     <p class="hint">The key ID and private key are sent to this desk process only — the same process
       already holding your <code class="mono">.env</code>. They are encrypted at rest with
       <b>AES-256-GCM</b> (via Fernet, keyed by your <code class="mono">MASTER_KEY</code>) before being
@@ -601,16 +611,33 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
 
 let state = null, dirty = false, focus = null;
 
+// Handed to us by /api/state when the desk is password-protected, and sent
+// back on every state-changing request. SameSite=Strict already blocks a
+// cross-site POST; this is the second lock on a door that moves money.
+let csrf = null;
+
 async function api(path, body) {
+  const headers = {"Content-Type": "application/json"};
+  if (csrf) headers["X-CSRF-Token"] = csrf;
   const res = await fetch(path, body ? {
-    method: "POST", headers: {"Content-Type": "application/json"},
-    body: JSON.stringify(body),
+    method: "POST", headers, body: JSON.stringify(body),
   } : {});
+  // The session expired or was revoked -- go back to the login page rather
+  // than silently showing a desk that no longer updates.
+  if (res.status === 401) { window.location = "/login"; return {}; }
   const payload = await res.json().catch(() => ({}));
   if (!res.ok && !("ok" in payload)) {
     throw new Error(payload.error || res.statusText);
   }
   return payload;
+}
+
+function logout() {
+  // A form POST rather than fetch: the response is a redirect that also
+  // clears the cookie, and letting the browser follow it is the whole job.
+  const f = document.createElement("form");
+  f.method = "POST"; f.action = "/logout";
+  document.body.appendChild(f); f.submit();
 }
 
 /* ------------------------------------------------------------------
@@ -633,6 +660,9 @@ showTab(localStorage.getItem("desk-tab") || "desk");
 
 function render(s) {
   state = s;
+  if (s.csrf) csrf = s.csrf;
+  $("c-signout").hidden = !(s.auth && s.auth.enabled);
+  $("c-sandbox").hidden = !s.sandbox;
   $("c-conn").textContent = "connected";
   $("c-conn").className = "chip live";
   $("c-mode").textContent = s.mode;
@@ -814,6 +844,18 @@ function renderRisk(s) {
 function renderConnect(s) {
   const lp = s.live_posture;
   const warn = $("connect-warn");
+  // In a sandbox the credential form is removed from the page, not merely
+  // disabled -- a public demo must not look like somewhere to paste a key.
+  $("connect-form").hidden = s.sandbox;
+  $("arm-panel").hidden = s.sandbox;
+  $("sandbox-note").hidden = !s.sandbox;
+  if (s.sandbox) {
+    warn.hidden = false;
+    warn.textContent = "Sandbox instance. It holds no Kalshi credentials, cannot "
+      + "accept any, and cannot place an order on any exchange. Market data is real; "
+      + "every fill you see here is simulated.";
+    return;
+  }
   if (lp.master_key_is_ephemeral) {
     warn.hidden = false;
     warn.textContent = "No MASTER_KEY is set in this process's environment -- a key was "
@@ -1060,6 +1102,8 @@ $("conn-submit").onclick = async () => {
     }
   } catch (e) { m.textContent = e.message; m.className = "msg err"; }
 };
+
+$("c-signout").onclick = logout;
 
 poll();
 setInterval(poll, 1000);

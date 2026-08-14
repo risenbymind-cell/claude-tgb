@@ -17,9 +17,9 @@ COPY site ./site
 VOLUME ["/app/data"]
 ENV DB_PATH=/app/data/kbot.sqlite3
 
-# Serves payment callbacks and /healthz. Outbound-only if you don't take
-# payments.
-EXPOSE 8080
+# 8080: payment callbacks and /healthz for the bot process.
+# 8787: the web desk, when this image is run as the desk (see DEPLOY.md).
+EXPOSE 8080 8787
 
 RUN useradd --create-home --uid 10001 kbot \
  && mkdir -p /app/data && chown -R kbot:kbot /app

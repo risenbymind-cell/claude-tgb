@@ -1,0 +1,57 @@
+# The web desk as its own fly.io app.
+#
+#   fly launch --config fly.desk.toml --no-deploy --copy-config
+#   fly volumes create kbot_desk --size 1
+#
+#   # Hash the password locally so the plaintext never reaches fly:
+#   DESK_PASSWORD='<12+ chars>' python -m kbot.webui hash-password
+#   fly secrets set DESK_PASSWORD_HASH='scrypt$...' MASTER_KEY=...
+#
+#   fly deploy --config fly.desk.toml
+#
+# Without DESK_PASSWORD_HASH the desk refuses to bind a public port and the
+# machine will fail its health check — that refusal is deliberate.
+#
+# `ord` is Chicago, closest to Kalshi's matching engine.
+
+app = "directionalbot-desk"
+primary_region = "ord"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  DB_PATH = "/data/desk.sqlite3"
+  # fly terminates TLS at its edge and forwards over the private network, so
+  # the forwarded headers are trustworthy here and the session cookie can be
+  # marked Secure.
+  DESK_TRUST_PROXY = "1"
+  TRADING_MODE = "paper"
+
+[mounts]
+  source = "kbot_desk"
+  destination = "/data"
+
+[processes]
+  desk = "python -m kbot.webui --host 0.0.0.0 --port 8787"
+
+[http_service]
+  internal_port = 8787
+  force_https = true
+  # A desk that scales to zero stops evaluating markets, loses its session
+  # state and its in-memory series, and wakes up blind.
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ["desk"]
+
+  [[http_service.checks]]
+    grace_period = "15s"
+    interval = "30s"
+    method = "GET"
+    path = "/healthz"
+    timeout = "5s"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

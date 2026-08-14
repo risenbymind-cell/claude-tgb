@@ -17,3 +17,49 @@ services:
       timeout: 5s
       retries: 3
       start_period: 15s
+
+  # The web desk. Same image, different command.
+  #
+  # Reachable from outside the container, so it REQUIRES a password -- the
+  # server refuses to bind a non-loopback address without one. Generate the
+  # hash on your own machine so the plaintext never reaches the host:
+  #
+  #   DESK_PASSWORD='<12+ chars>' python -m kbot.webui hash-password
+  #
+  # then put the output in .env as DESK_PASSWORD_HASH.
+  desk:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    command: ["python", "-m", "kbot.webui", "--host", "0.0.0.0", "--port", "8787"]
+    environment:
+      # Caddy terminates TLS and forwards; this lets the desk see the real
+      # client address for lockout, and mark its cookie Secure.
+      DESK_TRUST_PROXY: "1"
+    volumes:
+      - ./data:/app/data
+      - ./secrets:/app/secrets:ro
+    ports:
+      # Loopback only -- the TLS proxy is what faces the world.
+      - "127.0.0.1:8787:8787"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8787/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # A public demo, if you want one. No password, because there is nothing
+  # behind it to protect: --sandbox refuses credentials and has no order path.
+  # Commented out by default -- opt in deliberately.
+  #
+  # sandbox:
+  #   build: .
+  #   restart: unless-stopped
+  #   env_file: .env
+  #   command: ["python", "-m", "kbot.webui", "--host", "0.0.0.0", "--port", "8788", "--sandbox"]
+  #   environment:
+  #     TRADING_MODE: "paper"
+  #     DESK_TRUST_PROXY: "1"
+  #   ports:
+  #     - "127.0.0.1:8788:8788"

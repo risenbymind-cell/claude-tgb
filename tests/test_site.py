@@ -43,6 +43,14 @@ def test_the_local_desk_is_never_published():
     assert not (DOCS / "desk.html").exists()
 
 
+def test_the_login_page_is_never_published():
+    """A login form on a static host has nothing to authenticate against. It
+    would take a password, POST it into the void, and teach whoever typed it
+    that this project asks for credentials on a page that cannot check them --
+    the exact habit a phishing page relies on."""
+    assert not (DOCS / "login.html").exists()
+
+
 def test_no_secret_shaped_string_is_published():
     """A landing page is the easiest place in a project to paste a token."""
     for name in PUBLIC:

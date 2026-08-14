@@ -14,6 +14,13 @@ localhost for its data, so a public copy would render a permanently
 disconnected shell -- a page that cannot work where it is served does not
 belong on a public site. data.json is skipped too: app.html already has it
 inlined, and shipping it again would double the payload for nothing.
+
+login.html is not published either, and for a sharper reason: a login form
+served from a static host has nothing behind it to authenticate against. It
+would take a password, POST it into the void, and teach whoever typed it that
+this project asks for credentials on a page that cannot check them -- which is
+exactly the habit a phishing page relies on. Both pages are served by the desk
+process itself (see kbot/webui/server.py) and only ever from there.
 """
 
 from __future__ import annotations

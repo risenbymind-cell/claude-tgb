@@ -47,6 +47,39 @@ services:
       - key: PYTHON_VERSION
         value: "3.11.9"
 
+  # The web desk. A `web` service rather than a worker, so Render gives it a
+  # public HTTPS URL and terminates TLS for it.
+  #
+  # DESK_PASSWORD is prompted on deploy and stored as a secret. Without it the
+  # desk refuses to bind a public port and the deploy fails its health check —
+  # that refusal is the point: this port can place trades.
+  - type: web
+    name: directionalbot-desk
+    runtime: python
+    plan: starter
+    region: ohio
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m kbot.webui --host 0.0.0.0
+    autoDeploy: true
+    healthCheckPath: /healthz
+    disk:
+      name: kbot-desk
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: DESK_PASSWORD
+        sync: false        # prompted on deploy; at least 12 characters
+      - key: MASTER_KEY
+        generateValue: true
+      - key: DESK_TRUST_PROXY
+        value: "1"         # Render terminates TLS and forwards
+      - key: DB_PATH
+        value: /var/data/desk.sqlite3
+      - key: TRADING_MODE
+        value: paper       # raise this deliberately, not by default
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+
   # Separate service so market data keeps accumulating whether or not the bot
   # is trading, and a bot redeploy never interrupts a recording. This is what
   # makes the profitability question answerable in ~2 weeks.
