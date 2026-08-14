@@ -31,7 +31,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC, OUT = ROOT / "site", ROOT / "docs"
-PUBLIC = ("index.html", "app.html", "404.html", "robots.txt")
+
+#: CNAME is what binds the custom domain to this site, and GitHub Pages reads
+#: it from the *publishing source* -- which here is docs/, not the repository
+#: root. A CNAME at the root is silently ignored, which is a bad failure: the
+#: file exists, the settings look right, and the domain simply does not work.
+#: Publishing it from site/ like any other page means a rebuild cannot drop it
+#: either -- and a rebuild that dropped it would take the live domain down.
+PUBLIC = ("index.html", "app.html", "404.html", "robots.txt", "sitemap.xml", "CNAME")
 
 #: Shapes that must never reach a public page. A landing page is the easiest
 #: place in a project to paste a token by accident.

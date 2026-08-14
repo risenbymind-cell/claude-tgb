@@ -5,10 +5,10 @@
 #   sudo systemctl reload caddy
 #
 # Then set in .env:
-#   PAYMENT_CALLBACK_URL=https://yourdomain.com/webhook/payment
+#   PAYMENT_CALLBACK_URL=https://konneh.bot/webhook/payment
 #   DESK_TRUST_PROXY=1
 
-yourdomain.com {
+konneh.bot {
     encode gzip
 
     # The landing page.
@@ -37,7 +37,7 @@ yourdomain.com {
 # non-loopback port at all, so this proxy is not the only thing guarding it —
 # but it is what provides TLS, and without TLS the password crosses the
 # network in the clear.
-desk.yourdomain.com {
+desk.konneh.bot {
     encode gzip
     reverse_proxy 127.0.0.1:8787 {
         # The desk reads these only when DESK_TRUST_PROXY=1, so a forged
@@ -59,7 +59,7 @@ desk.yourdomain.com {
 # A public sandbox, if you run one. No password by design: it holds no
 # credentials, refuses to accept any, and has no order path.
 #
-# sandbox.yourdomain.com {
+# sandbox.konneh.bot {
 #     encode gzip
 #     reverse_proxy 127.0.0.1:8788 {
 #         header_up X-Forwarded-Proto {scheme}

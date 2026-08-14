@@ -14,7 +14,22 @@ import pytest
 
 DOCS = Path("docs")
 SITE = Path("site")
-PUBLIC = ("index.html", "app.html", "404.html", "robots.txt")
+
+
+def _build_script():
+    """Load scripts/build-site.py, whose hyphen makes it unimportable."""
+    import importlib.util
+
+    path = Path(__file__).resolve().parent.parent / "scripts" / "build-site.py"
+    spec = importlib.util.spec_from_file_location("build_site", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+#: Taken from the build script rather than restated, so a file added to the
+#: published set cannot be missed by these tests.
+PUBLIC = _build_script().PUBLIC
 
 
 def test_the_published_copy_matches_the_source():
@@ -41,6 +56,56 @@ def test_the_local_desk_is_never_published():
     """It polls localhost for its data, so a public copy is a permanently
     disconnected shell -- a broken product rather than a page."""
     assert not (DOCS / "desk.html").exists()
+
+
+DOMAIN = "konneh.bot"
+
+
+def test_the_custom_domain_is_bound_where_pages_reads_it():
+    """GitHub Pages reads CNAME from the *publishing source*, which here is
+    docs/ -- a CNAME at the repository root is silently ignored. That is a bad
+    failure mode: the file exists, the settings look right, and the domain
+    just does not work."""
+    assert (DOCS / "CNAME").exists(), "docs/CNAME is what binds the domain"
+    assert (DOCS / "CNAME").read_text().strip() == DOMAIN
+
+
+def test_a_rebuild_cannot_drop_the_domain():
+    """CNAME is published like any other page rather than written by hand, so
+    regenerating docs/ cannot take the live domain down."""
+    assert "CNAME" in PUBLIC
+    assert (SITE / "CNAME").exists(), "site/ is the source of truth"
+
+
+def test_the_root_cname_does_not_come_back():
+    """It does nothing at the root, and having one there invites the belief
+    that the domain is configured when it is not."""
+    assert not (DOCS.parent / "CNAME").exists()
+
+
+def test_the_canonical_urls_point_at_the_real_domain():
+    """Relative canonicals would resolve to whichever host served the page --
+    including the github.io one, which then competes with the domain."""
+    for name, path in (("index.html", "/"), ("app.html", "/app.html")):
+        html = (DOCS / name).read_text()
+        assert f'rel="canonical" href="https://{DOMAIN}{path}"' in html, name
+
+
+def test_the_sitemap_lists_only_pages_that_exist():
+    import xml.etree.ElementTree as ET
+
+    ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+    tree = ET.parse(DOCS / "sitemap.xml")
+    locs = [e.text for e in tree.getroot().findall(".//s:loc", ns)]
+    assert locs, "sitemap parsed but found no URLs -- check the namespace"
+    for loc in locs:
+        assert loc.startswith(f"https://{DOMAIN}/")
+        page = loc.rsplit("/", 1)[1] or "index.html"
+        assert (DOCS / page).exists(), f"{loc} is a 404"
+
+
+def test_robots_points_at_the_sitemap():
+    assert f"Sitemap: https://{DOMAIN}/sitemap.xml" in (DOCS / "robots.txt").read_text()
 
 
 def test_the_login_page_is_never_published():

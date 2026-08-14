@@ -1,5 +1,9 @@
 User-agent: *
 Allow: /
 
-# The desk is a local application and is never published here.
+# The desk is a local application and is never published here. Listed anyway:
+# a crawler that finds the path referenced anywhere else should not follow it.
 Disallow: /desk.html
+Disallow: /login.html
+
+Sitemap: https://konneh.bot/sitemap.xml
