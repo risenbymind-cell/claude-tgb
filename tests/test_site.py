@@ -48,8 +48,17 @@ def test_the_published_copy_matches_the_source():
 
 @pytest.mark.parametrize("name", PUBLIC)
 def test_every_public_page_is_published(name):
-    assert (DOCS / name).exists(), f"docs/{name} missing"
-    assert (DOCS / name).read_bytes() == (SITE / name).read_bytes()
+    """Present, and non-trivial.
+
+    Byte equality with site/ is deliberately not asserted: the build injects
+    canonical and social metadata into the pages and a Sitemap line into
+    robots.txt, so the published copy is *derived* from the source rather than
+    copied from it. Drift is caught by --check above, which compares against
+    a real rebuild instead of against the raw source.
+    """
+    published = DOCS / name
+    assert published.exists(), f"docs/{name} missing"
+    assert published.stat().st_size > 0, f"docs/{name} is empty"
 
 
 def test_the_local_desk_is_never_published():
@@ -58,54 +67,95 @@ def test_the_local_desk_is_never_published():
     assert not (DOCS / "desk.html").exists()
 
 
-DOMAIN = "konneh.bot"
+# ---------------- the custom domain ----------------
+#
+# Publishing a CNAME makes Pages 301 the github.io URL to the custom domain.
+# So a CNAME added before DNS answers does not prepare the site -- it takes
+# the working one offline and replaces it with a redirect into nothing. That
+# ordering is the thing these tests exist to protect.
 
 
-def test_the_custom_domain_is_bound_where_pages_reads_it():
-    """GitHub Pages reads CNAME from the *publishing source*, which here is
-    docs/ -- a CNAME at the repository root is silently ignored. That is a bad
-    failure mode: the file exists, the settings look right, and the domain
-    just does not work."""
-    assert (DOCS / "CNAME").exists(), "docs/CNAME is what binds the domain"
-    assert (DOCS / "CNAME").read_text().strip() == DOMAIN
-
-
-def test_a_rebuild_cannot_drop_the_domain():
-    """CNAME is published like any other page rather than written by hand, so
-    regenerating docs/ cannot take the live domain down."""
-    assert "CNAME" in PUBLIC
-    assert (SITE / "CNAME").exists(), "site/ is the source of truth"
+def test_a_cname_is_only_published_alongside_a_domain():
+    build = _build_script()
+    assert (build.DOMAIN_FILE.exists()) == (DOCS / "CNAME").exists(), (
+        "docs/CNAME and site/CNAME must appear and disappear together"
+    )
 
 
 def test_the_root_cname_does_not_come_back():
-    """It does nothing at the root, and having one there invites the belief
-    that the domain is configured when it is not."""
+    """It does nothing at the root -- Pages reads CNAME from the publishing
+    source, which is docs/. Having one there invites the belief that the
+    domain is configured when it is not."""
     assert not (DOCS.parent / "CNAME").exists()
 
 
-def test_the_canonical_urls_point_at_the_real_domain():
-    """Relative canonicals would resolve to whichever host served the page --
-    including the github.io one, which then competes with the domain."""
-    for name, path in (("index.html", "/"), ("app.html", "/app.html")):
+def test_no_page_advertises_a_domain_that_is_not_configured():
+    """A canonical pointing at a host that does not resolve is worse than
+    none: it tells search engines the real copy lives somewhere unreachable."""
+    build = _build_script()
+    if build.read_domain():
+        pytest.skip("a domain is configured; covered by the tests below")
+    for name in ("index.html", "app.html"):
         html = (DOCS / name).read_text()
-        assert f'rel="canonical" href="https://{DOMAIN}{path}"' in html, name
+        assert "canonical" not in html, name
+        assert "og:url" not in html, name
+    assert not (DOCS / "sitemap.xml").exists()
+    assert "Sitemap:" not in (DOCS / "robots.txt").read_text()
 
 
-def test_the_sitemap_lists_only_pages_that_exist():
+def test_the_placeholder_is_always_substituted():
+    """A literal <!--SITE-META--> reaching a visitor means the build did not
+    run, which is silent in a way a broken tag is not."""
+    for name in ("index.html", "app.html"):
+        assert "<!--SITE-META-->" not in (DOCS / name).read_text(), name
+
+
+def test_configuring_a_domain_wires_everything_to_it(tmp_path, monkeypatch):
+    """The switch has to light up every piece at once -- a CNAME without
+    canonicals, or canonicals without a sitemap, is a half-migrated site."""
     import xml.etree.ElementTree as ET
 
+    build = _build_script()
+    monkeypatch.setattr(build, "OUT", tmp_path)
+    monkeypatch.setattr(build, "DOMAIN_FILE", tmp_path / "CNAME")
+    (tmp_path / "CNAME").write_text("example.test\n")
+
+    assert build.build() == 0
+
+    assert (tmp_path / "CNAME").read_text().strip() == "example.test"
+    for name, path in (("index.html", "/"), ("app.html", "/app.html")):
+        html = (tmp_path / name).read_text()
+        assert f'rel="canonical" href="https://example.test{path}"' in html, name
+    assert "Sitemap: https://example.test/sitemap.xml" in (
+        tmp_path / "robots.txt"
+    ).read_text()
+
     ns = {"s": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-    tree = ET.parse(DOCS / "sitemap.xml")
-    locs = [e.text for e in tree.getroot().findall(".//s:loc", ns)]
+    locs = [
+        e.text
+        for e in ET.parse(tmp_path / "sitemap.xml").getroot().findall(".//s:loc", ns)
+    ]
     assert locs, "sitemap parsed but found no URLs -- check the namespace"
     for loc in locs:
-        assert loc.startswith(f"https://{DOMAIN}/")
         page = loc.rsplit("/", 1)[1] or "index.html"
-        assert (DOCS / page).exists(), f"{loc} is a 404"
+        assert (tmp_path / page).exists(), f"{loc} would be a 404"
 
 
-def test_robots_points_at_the_sitemap():
-    assert f"Sitemap: https://{DOMAIN}/sitemap.xml" in (DOCS / "robots.txt").read_text()
+def test_removing_the_domain_takes_the_cname_with_it(tmp_path, monkeypatch):
+    """Otherwise a stale CNAME keeps redirecting the site to a domain nobody
+    is serving any more."""
+    build = _build_script()
+    monkeypatch.setattr(build, "OUT", tmp_path)
+    monkeypatch.setattr(build, "DOMAIN_FILE", tmp_path / "CNAME")
+
+    (tmp_path / "CNAME").write_text("example.test\n")
+    build.build()
+    assert (tmp_path / "CNAME").exists()
+
+    (tmp_path / "CNAME").unlink()
+    build.build()
+    assert not (tmp_path / "CNAME").exists()
+    assert not (tmp_path / "sitemap.xml").exists()
 
 
 def test_the_login_page_is_never_published():

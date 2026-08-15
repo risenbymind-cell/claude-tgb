@@ -5,5 +5,3 @@ Allow: /
 # a crawler that finds the path referenced anywhere else should not follow it.
 Disallow: /desk.html
 Disallow: /login.html
-
-Sitemap: https://konneh.bot/sitemap.xml
