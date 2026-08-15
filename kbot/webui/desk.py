@@ -36,6 +36,7 @@ from ..safety import KillSwitch, TradingMode, measure_clock_drift
 from ..strategy import MarketContext, Signal, get_strategy, strategy_names
 from ..engine.broker import IntentRecorder, LiveBroker, PaperBroker
 from ..engine.discovery import MarketDiscovery
+from .latency import Latency
 
 log = logging.getLogger(__name__)
 
@@ -246,6 +247,7 @@ class Desk:
         self._last_balance_at: float = 0.0
         self._research_cache: dict | None = None
         self._research_at: float = 0.0
+        self.latency = Latency()
 
         #: Every command, kill, arming step and boot -- newest first, capped.
         self.audit: deque[dict] = deque(maxlen=AUDIT_MAXLEN)
@@ -375,9 +377,14 @@ class Desk:
     # ---------------- the pass ----------------
 
     async def _refresh(self) -> None:
+        with self.latency.measure("pass"):
+            await self._refresh_once()
+
+    async def _refresh_once(self) -> None:
         now = time.time()
         if now - self.last_refresh > self.settings.discovery_interval_s:
-            markets = await self.discovery.refresh(self.settings.coins)
+            with self.latency.measure("discovery"):
+                markets = await self.discovery.refresh(self.settings.coins)
             self.feed.set_tickers(m.ticker for m in markets.values())
             self.last_refresh = now
 
@@ -393,6 +400,12 @@ class Desk:
             book = self.feed.book(market.ticker)
             if book is None:
                 continue
+            # How stale the book was when the strategy read it. Not a duration
+            # this loop spent, but the read-side latency that determines
+            # whether the price a decision used was still true.
+            age = book.age()
+            if age != float("inf"):
+                self.latency.record("feed", age)
             mid = book.mid
             if mid is not None and not book.is_stale:
                 fair = book.microprice() or mid
@@ -477,7 +490,8 @@ class Desk:
             # Every strategy is evaluated, not just the selected one -- seeing
             # what the others would have done is most of the value of watching.
             for name in strategy_names():
-                signal = get_strategy(name).evaluate(ctx)
+                with self.latency.measure("strategy"):
+                    signal = get_strategy(name).evaluate(ctx)
                 if signal is not None:
                     view.signals.append(
                         {
@@ -574,9 +588,10 @@ class Desk:
             return
 
         broker = self.broker()
-        result = await broker.buy(
-            view.ticker, signal.side, count, signal.price_dc, book
-        )
+        with self.latency.measure("order"):
+            result = await broker.buy(
+                view.ticker, signal.side, count, signal.price_dc, book
+            )
         if not result.ok:
             self.log_audit("engine", "entry_rejected", {
                 "coin": view.coin, "ticker": view.ticker, "side": signal.side,
@@ -646,9 +661,10 @@ class Desk:
             pos.exit_error = "kill switch engaged; exit not sent"
             return
 
-        result = await self.broker().sell(
-            pos.ticker, pos.side, pos.count, price_dc, book
-        )
+        with self.latency.measure("order"):
+            result = await self.broker().sell(
+                pos.ticker, pos.side, pos.count, price_dc, book
+            )
         if not result.ok:
             pos.exit_error = result.error
             self.log_audit("engine", "exit_rejected", {
@@ -997,6 +1013,7 @@ class Desk:
             },
             "audit": list(self.audit)[:150],
             "decisions": list(self.decisions)[:150],
+            "latency": self.latency.snapshot(),
             "markets": [
                 {
                     "coin": v.coin, "ticker": v.ticker,

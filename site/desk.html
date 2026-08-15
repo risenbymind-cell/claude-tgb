@@ -478,6 +478,22 @@ footer p{max-width:80ch}
     <div class="msg" id="risk-msg"></div>
   </div>
 
+  <h2>Latency</h2>
+  <p class="hint">Percentiles, not averages. A loop that is usually fast tells you nothing —
+    the slow passes cluster exactly when the book is moving, which is when the entries matter.
+    <b>feed</b> is how stale a book was when a strategy read it; <b>order</b> is the round trip
+    that sits between a decision and a fill.</p>
+  <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th>Stage</th><th class="num">n</th><th class="num">P50</th>
+        <th class="num">P95</th><th class="num">P99</th><th class="num">Max</th>
+      </tr></thead>
+      <tbody id="latency"></tbody>
+    </table>
+  </div>
+  <div class="empty" id="latency-empty">No samples yet.</div>
+
   <h2>Production arming</h2>
   <div class="panel panel-pad" id="arm-panel">
     <p class="hint">Arming is required before this desk will send a <b>production</b> order, and it is
@@ -902,6 +918,22 @@ function renderRisk(s) {
   const lp = s.live_posture;
   $("arm-a-box").classList.toggle("done", lp.armed_step_a);
   $("arm-b-box").classList.toggle("done", lp.production_armed);
+
+  const rows = s.latency || [];
+  $("latency-empty").hidden = rows.length > 0;
+  const ms = (v) => v === null || v === undefined ? "—" : v.toFixed(1) + "ms";
+  // A tail far above the median is the shape worth noticing, so it is
+  // coloured rather than left as one number among five.
+  const tail = (v, p50) => (p50 && v > Math.max(50, p50 * 10)) ? "neg" : "";
+  $("latency").innerHTML = rows.map((r) => `
+    <tr>
+      <td data-k="stage" class="mono"><b>${esc(r.stage)}</b></td>
+      <td data-k="n" class="num dim"><span class="card-label">Samples</span>${r.n.toLocaleString()}</td>
+      <td data-k="p50" class="num"><span class="card-label">P50</span>${ms(r.p50)}</td>
+      <td data-k="p95" class="num ${tail(r.p95, r.p50)}"><span class="card-label">P95</span>${ms(r.p95)}</td>
+      <td data-k="p99" class="num ${tail(r.p99, r.p50)}"><span class="card-label">P99</span>${ms(r.p99)}</td>
+      <td data-k="max" class="num dim"><span class="card-label">Max</span>${ms(r.max)}</td>
+    </tr>`).join("");
 }
 
 function renderConnect(s) {

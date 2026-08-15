@@ -210,7 +210,7 @@ def test_the_series_resets_when_the_window_rolls():
 
     from kbot.webui import desk as desk_mod
 
-    src = inspect.getsource(desk_mod.Desk._refresh)
+    src = inspect.getsource(desk_mod.Desk._refresh_once)
     assert "open_time != market.open_time" in src
     assert "points = []" in src
 
