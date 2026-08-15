@@ -153,6 +153,21 @@ def cmd_days(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_inventory(args: argparse.Namespace) -> int:
+    """What is recorded, and what it can support.
+
+    Exists because every other command here refuses to answer on a thin
+    sample, and a refusal tells you nothing about how far off you are.
+    """
+    from .inventory import format_inventory, take_inventory
+
+    inv = take_inventory(args.dir)
+    print(format_inventory(inv))
+    # Non-zero while the data cannot support a verdict, so this is usable as
+    # a gate in a script: run the search only when it would mean something.
+    return 0 if inv.enough_for_a_verdict else 1
+
+
 def _config_from(args: argparse.Namespace) -> ReplayConfig:
     return ReplayConfig(
         strategy=args.strategy,
@@ -359,6 +374,11 @@ def build_parser() -> argparse.ArgumentParser:
     rec.set_defaults(func=cmd_record)
 
     sub.add_parser("days", help="list recorded days").set_defaults(func=cmd_days)
+
+    sub.add_parser(
+        "inventory",
+        help="what is recorded, and whether it can support a verdict yet",
+    ).set_defaults(func=cmd_inventory)
 
     def add_replay_args(p: argparse.ArgumentParser) -> None:
         p.add_argument("--strategy", default="drift")

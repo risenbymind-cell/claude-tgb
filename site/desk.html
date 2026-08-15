@@ -190,6 +190,15 @@ footer p{max-width:80ch}
 .msg{font-size:12.5px;margin-top:8px;min-height:1.4em}
 .msg.err{color:var(--down)}
 .msg.ok{color:var(--up)}
+/* Progress toward a sample that can support a verdict. */
+.progress-head{display:flex;justify-content:space-between;align-items:baseline;
+  margin-bottom:8px;font-variant-numeric:tabular-nums}
+.progress-head span:first-child{font-size:19px;font-weight:600;letter-spacing:-.02em}
+.progress{height:8px;border-radius:4px;background:var(--surface-2);overflow:hidden}
+.progress-fill{height:100%;border-radius:4px;background:var(--accent);
+  transition:width .3s ease;min-width:2px}
+.progress-fill.done{background:var(--up)}
+
 .runbook{margin-bottom:22px}
 .runbook h3{font:600 13px var(--mono);margin:0 0 6px}
 .runbook ol,.runbook ul{margin:0;padding-left:20px;color:var(--ink-2);font-size:13px}
@@ -304,6 +313,7 @@ footer p{max-width:80ch}
     <button class="tab-btn" data-tab="decisions" role="tab">Decisions</button>
     <button class="tab-btn" data-tab="ledger" role="tab">Ledger</button>
     <button class="tab-btn" data-tab="risk" role="tab">Risk</button>
+    <button class="tab-btn" data-tab="research" role="tab">Research</button>
     <button class="tab-btn" data-tab="connect" role="tab">Connect</button>
     <button class="tab-btn" data-tab="audit" role="tab">Audit</button>
     <button class="tab-btn" data-tab="runbooks" role="tab">Runbooks</button>
@@ -491,6 +501,59 @@ footer p{max-width:80ch}
       <button class="ghost" id="arm-disarm">Disarm</button>
     </div>
   </div>
+</section>
+
+<!-- ================= RESEARCH ================= -->
+<section class="tabpanel" id="tab-research">
+  <h2>Can this data answer anything yet?</h2>
+  <p class="hint">Every statistical tool here refuses to return a verdict on a sample that is
+    too small — which is the most valuable thing they do, and also invisible: you run the command,
+    it says NOT ENOUGH DATA, and nothing tells you how far off you are. This is that distance,
+    as a number.</p>
+
+  <div class="panel panel-pad">
+    <div class="progress-head">
+      <span class="mono" id="r-count">—</span>
+      <span class="mono dim" id="r-pct">—</span>
+    </div>
+    <div class="progress"><div class="progress-fill" id="r-fill"></div></div>
+    <div class="msg" id="r-verdict" style="margin-top:14px"></div>
+  </div>
+
+  <div class="panel panel-pad" id="r-capture-warn" hidden>
+    <div class="warn-box" style="margin:0" id="r-capture-text"></div>
+  </div>
+
+  <h2>What is on disk</h2>
+  <div class="panel panel-pad">
+    <dl class="kv" id="r-summary"></dl>
+  </div>
+
+  <h2>By coin</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr>
+        <th>Coin</th><th class="num">Windows</th><th class="num">Settled</th>
+        <th class="num">Yes</th><th class="num">No</th><th>Balance</th>
+      </tr></thead>
+      <tbody id="r-coins"></tbody>
+    </table>
+  </div>
+  <div class="empty" id="r-empty" hidden>
+    No recordings found. Start one with
+    <code class="mono">python -m kbot.research record</code>.
+  </div>
+
+  <footer>
+    <p><b>Why 200.</b> Below roughly that many settled windows, a search over thousands of
+    strategy plans will always find something that looks excellent, because with enough
+    candidates and few enough observations one of them fits the noise. The threshold is not
+    caution — it is the point at which a result starts to carry information.</p>
+    <p><b>Balance matters as much as count.</b> A full sample where 90% of markets settled the
+    same way is one directional move counted many times, not many independent observations. The
+    tooling withholds a verdict on that too, and says so here rather than reporting a confident
+    number that is really a measurement of one trend.</p>
+  </footer>
 </section>
 
 <!-- ================= CONNECT ================= -->
@@ -1012,6 +1075,80 @@ async function poll() {
   }
 }
 
+/* The inventory reads every recording on disk, so it gets its own slow
+   cadence rather than riding the one-second state poll. */
+function renderResearch(r) {
+  if (!r.available) {
+    $("r-empty").hidden = false;
+    $("r-verdict").textContent = r.error || "No recordings found.";
+    $("r-verdict").className = "msg err";
+    return;
+  }
+  $("r-empty").hidden = r.settled > 0;
+  $("r-count").textContent = `${r.settled.toLocaleString()} / ${r.required} settled markets`;
+  $("r-pct").textContent = (100 * r.progress).toFixed(0) + "%";
+  const fill = $("r-fill");
+  fill.style.width = Math.max(0, Math.min(100, 100 * r.progress)) + "%";
+  fill.className = "progress-fill" + (r.enough && !r.one_sided ? " done" : "");
+
+  $("r-verdict").textContent = r.verdict;
+  $("r-verdict").className = "msg " + (r.enough && !r.one_sided ? "ok" : "err");
+
+  // Distinguish "needs more days" from "the recorder is not running", which
+  // is a different problem and no amount of waiting fixes it.
+  const eff = r.capture_efficiency;
+  if (eff !== null && eff < 0.5) {
+    $("r-capture-warn").hidden = false;
+    $("r-capture-text").textContent =
+      `Capture rate ${(100 * eff).toFixed(0)}%: only that share of the windows `
+      + `${r.coins.length} coins over ${r.days} day(s) could have produced was actually `
+      + `recorded. The recorder was not running for most of that time. That is a separate `
+      + `problem from needing more days, and waiting does not fix it — run it somewhere `
+      + `that stays up.`;
+  } else {
+    $("r-capture-warn").hidden = true;
+  }
+
+  const days = r.days_remaining;
+  $("r-summary").innerHTML = `
+    <dt>Directory</dt><dd>${esc(r.directory)}</dd>
+    <dt>Days</dt><dd>${r.days}${r.first_day ? ` (${esc(r.first_day)} … ${esc(r.last_day)})` : ""}</dd>
+    <dt>Snapshots</dt><dd>${r.snapshots.toLocaleString()}</dd>
+    <dt>Windows</dt><dd>${r.windows.toLocaleString()}</dd>
+    <dt>Settled</dt><dd>${r.settled.toLocaleString()} — ${r.yes} yes / ${r.no} no</dd>
+    <dt>Balance</dt><dd>${r.settled === 0 ? "—" :
+      `${(100 * r.one_sided_share).toFixed(0)}% one way `
+      + (r.one_sided ? '<span class="badge bad">too one-sided</span>'
+                     : '<span class="badge ok">usable</span>')}</dd>
+    <dt>At this rate</dt><dd>${days === null ? "—" :
+      days <= 0 ? '<span class="badge ok">threshold reached</span>'
+                : `about ${days < 1 ? "<1" : Math.round(days)} more day(s)`}</dd>
+  `;
+
+  $("r-coins").innerHTML = r.coins.map((c) => {
+    const share = c.settled ? Math.max(c.yes, c.no) / c.settled : 0;
+    return `<tr>
+      <td data-k="coin" class="mono"><b>${esc(c.coin)}</b></td>
+      <td data-k="windows" class="num"><span class="card-label">Windows</span>${c.windows.toLocaleString()}</td>
+      <td data-k="settled" class="num"><span class="card-label">Settled</span>${c.settled.toLocaleString()}</td>
+      <td data-k="yes" class="num pos"><span class="card-label">Yes</span>${c.yes}</td>
+      <td data-k="no" class="num neg"><span class="card-label">No</span>${c.no}</td>
+      <td data-k="balance"><span class="card-label">Balance</span>${
+        c.settled === 0 ? '<span class="dim">—</span>'
+        : `<span class="${share >= 0.75 ? "neg" : "dim"}">${(100 * share).toFixed(0)}% one way</span>`}</td>
+    </tr>`;
+  }).join("");
+}
+
+async function pollResearch() {
+  try {
+    renderResearch(await api("/api/research"));
+  } catch (e) {
+    $("r-verdict").textContent = e.message;
+    $("r-verdict").className = "msg err";
+  }
+}
+
 $("toggle").onclick = async () => {
   try { render(await api("/api/trading", {enabled: !state.enabled})); }
   catch (e) { alert(e.message); }
@@ -1107,6 +1244,8 @@ $("c-signout").onclick = logout;
 
 poll();
 setInterval(poll, 1000);
+pollResearch();
+setInterval(pollResearch, 60000);
 </script>
 </body>
 </html>

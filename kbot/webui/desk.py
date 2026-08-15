@@ -18,6 +18,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import secrets
 import time
 from collections import deque
@@ -43,6 +44,15 @@ DECISIONS_MAXLEN = 300
 #: A balance only moves when a fill happens; polling it every pass would spend
 #: rate limit on an unchanged number.
 BALANCE_INTERVAL_S = 15.0
+
+#: The inventory reads every recording on disk. Far too expensive for a
+#: one-second poll, and the answer only moves once a quarter-hour anyway.
+RESEARCH_TTL_S = 60.0
+
+#: Mirrors research.signals.MIN_WINDOWS. Restated rather than imported at
+#: module level so the desk does not pull in the research package -- and its
+#: numpy-free statistics -- just to start.
+MIN_RESEARCH_WINDOWS = 200
 
 #: Two distinct typed phrases so arming cannot happen by holding one key or
 #: pasting one clipboard entry twice. Neither phrase alone can move production
@@ -234,6 +244,8 @@ class Desk:
         self._broker_key: tuple | None = None
         self.balance_dc: int | None = None
         self._last_balance_at: float = 0.0
+        self._research_cache: dict | None = None
+        self._research_at: float = 0.0
 
         #: Every command, kill, arming step and boot -- newest first, capped.
         self.audit: deque[dict] = deque(maxlen=AUDIT_MAXLEN)
@@ -762,6 +774,68 @@ class Desk:
             "host": self.settings.rest_base,
         })
         return {"ok": True, "key_id": _mask(key_id), "fingerprint": fingerprint}
+
+    # ---------------- research ----------------
+
+    def research(self) -> dict:
+        """What the recordings can currently support.
+
+        Cached for a minute: it reads every recording on disk, which is far
+        too expensive for the one-second poll the rest of the desk runs on,
+        and the answer moves in units of quarter-hours anyway.
+        """
+        now = time.time()
+        if self._research_cache and now - self._research_at < RESEARCH_TTL_S:
+            return self._research_cache
+
+        from pathlib import Path
+
+        directory = Path(
+            os.getenv("RECORDINGS_DIR", self.settings.db_path.parent / "recordings")
+        )
+        try:
+            from ..research.inventory import take_inventory
+
+            inv = take_inventory(directory)
+        except Exception as exc:  # noqa: BLE001 - a tab must not break the desk
+            log.warning("Inventory failed: %s", exc)
+            return {"available": False, "error": str(exc)[:200],
+                    "directory": str(directory)}
+
+        payload = {
+            "available": True,
+            "directory": str(directory),
+            "days": len(inv.days),
+            "first_day": inv.days[0] if inv.days else None,
+            "last_day": inv.days[-1] if inv.days else None,
+            "snapshots": inv.snapshots,
+            "windows": inv.windows,
+            "settled": inv.settled,
+            "yes": inv.yes,
+            "no": inv.no,
+            "required": MIN_RESEARCH_WINDOWS,
+            "progress": round(inv.progress, 4),
+            "enough": inv.enough_for_a_verdict,
+            "one_sided": inv.is_one_sided,
+            "one_sided_share": round(inv.one_sided_share, 3),
+            "capture_efficiency": (
+                None if inv.capture_efficiency is None
+                else round(inv.capture_efficiency, 4)
+            ),
+            "days_remaining": inv.days_remaining_observed(),
+            "days_remaining_ideal": inv.days_remaining(),
+            "verdict": inv.verdict(),
+            "coins": [
+                {
+                    "coin": c.coin, "windows": c.windows, "settled": c.settled,
+                    "yes": c.yes, "no": c.no,
+                }
+                for c in sorted(inv.coins.values(), key=lambda c: c.coin)
+            ],
+        }
+        self._research_cache = payload
+        self._research_at = now
+        return payload
 
     # ---------------- health / reconcile ----------------
 

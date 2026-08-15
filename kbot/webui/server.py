@@ -507,6 +507,11 @@ class DeskServer:
         if method == "GET" and path == "/api/state":
             return _json(self.desk.snapshot())
 
+        if method == "GET" and path == "/api/research":
+            # Its own route rather than part of /api/state: it reads every
+            # recording on disk, and the state payload is polled once a second.
+            return _json(self.desk.research())
+
         if method == "GET" and path == "/healthz":
             return _json({"ok": True, "markets": len(self.desk.markets)})
 

@@ -325,6 +325,59 @@ async def test_master_key_is_not_ephemeral_when_configured(desk):
     assert desk.snapshot()["live_posture"]["master_key_is_ephemeral"] is False
 
 
+# ---------------- research ----------------
+
+
+async def test_the_research_route_answers(desk):
+    server = DeskServer(desk)
+    raw = await server._route("GET", "/api/research", b"")
+    assert status(raw).startswith("200")
+    payload = body(raw)
+    assert "settled" in payload and "required" in payload
+
+
+async def test_research_reports_no_data_rather_than_failing(desk, tmp_path, monkeypatch):
+    """A missing recordings directory is the normal state on a fresh install,
+    not an error worth breaking a tab over."""
+    monkeypatch.setenv("RECORDINGS_DIR", str(tmp_path / "does-not-exist"))
+    desk._research_cache = None
+    payload = desk.research()
+    assert payload["available"] is True
+    assert payload["settled"] == 0
+    assert payload["enough"] is False
+
+
+async def test_research_is_cached(desk, monkeypatch):
+    """It reads every recording on disk; the desk polls once a second."""
+    calls = []
+    real = desk.research
+
+    from kbot.research import inventory as inv_mod
+
+    original = inv_mod.take_inventory
+
+    def counting(directory):
+        calls.append(directory)
+        return original(directory)
+
+    monkeypatch.setattr(inv_mod, "take_inventory", counting)
+    desk._research_cache = None
+    desk.research()
+    desk.research()
+    desk.research()
+    assert len(calls) == 1, "the inventory must not be re-read on every poll"
+
+
+async def test_the_research_tab_exists_in_the_page():
+    from kbot.webui.server import PAGE
+
+    text = PAGE.read_text()
+    assert 'data-tab="research"' in text
+    assert 'id="tab-research"' in text
+    assert "function renderResearch" in text
+    assert "/api/research" in text
+
+
 # ---------------- health / reconcile ----------------
 
 
