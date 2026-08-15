@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "paperpoly": {
+      "type": "http",
+      "url": "https://paperpoly.io/api/mcp"
+    }
+  }
+}
