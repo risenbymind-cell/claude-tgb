@@ -540,6 +540,24 @@ footer p{max-width:80ch}
     <div class="warn-box" style="margin:0" id="r-capture-text"></div>
   </div>
 
+  <h2>Is the recorder running?</h2>
+  <div class="panel panel-pad">
+    <dl class="kv" id="r-recorder"></dl>
+  </div>
+
+  <div id="r-gaps-wrap" hidden>
+    <h2>Gaps</h2>
+    <p class="hint">Stretches with nothing recorded at all. These are the difference between
+      "needs more days" and "was never running" — and only the second is fixed by deploying it
+      somewhere that stays up.</p>
+    <div class="tablewrap">
+      <table>
+        <thead><tr><th>Started</th><th class="num">Duration</th></tr></thead>
+        <tbody id="r-gaps"></tbody>
+      </table>
+    </div>
+  </div>
+
   <h2>What is on disk</h2>
   <div class="panel panel-pad">
     <dl class="kv" id="r-summary"></dl>
@@ -1140,6 +1158,36 @@ function renderResearch(r) {
   } else {
     $("r-capture-warn").hidden = true;
   }
+
+  // The last record written is the heartbeat. A separate heartbeat file
+  // could report healthy while nothing was actually being captured.
+  const age = r.last_sample_age_s;
+  const ageText = age === null ? "never"
+    : age < 120 ? `${age}s ago`
+    : age < 7200 ? `${Math.round(age / 60)} minutes ago`
+    : `${(age / 3600).toFixed(1)} hours ago`;
+  $("r-recorder").innerHTML = `
+    <dt>Status</dt><dd>${r.recording_now
+      ? '<span class="badge ok">recording</span>'
+      : '<span class="badge bad">not running</span> nothing is being captured right now'}</dd>
+    <dt>Last sample</dt><dd>${ageText}</dd>
+    <dt>Uptime</dt><dd>${r.uptime === null ? "—"
+      : `${(100 * r.uptime).toFixed(0)}% of the span covered by these recordings`}</dd>
+    <dt>Downtime</dt><dd>${r.gap_count
+      ? `${r.downtime_hours.toFixed(1)}h across ${r.gap_count} gap(s)`
+      : '<span class="dim">none</span>'}</dd>
+    <dt>Start it</dt><dd class="dim">python -m kbot.research record</dd>
+  `;
+
+  $("r-gaps-wrap").hidden = !(r.gaps || []).length;
+  $("r-gaps").innerHTML = (r.gaps || []).map((g) => {
+    const hrs = g.seconds / 3600;
+    return `<tr>
+      <td data-k="started" class="mono"><span class="card-label">Started</span>${esc(g.describe.split("->")[0].trim())}</td>
+      <td data-k="duration" class="num neg"><span class="card-label">Duration</span>${
+        hrs >= 1 ? hrs.toFixed(1) + "h" : Math.round(g.seconds / 60) + "m"}</td>
+    </tr>`;
+  }).join("");
 
   const days = r.days_remaining;
   $("r-summary").innerHTML = `

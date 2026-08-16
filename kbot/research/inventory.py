@@ -51,11 +51,68 @@ class CoinInventory:
         return max(self.yes, self.no) / self.settled
 
 
+#: A gap longer than this is the recorder being down rather than a pause
+#: between samples. The recorder samples about once a second, so a couple of
+#: minutes is far outside normal jitter, a container pause or a retry.
+GAP_THRESHOLD_S = 120.0
+
+
+@dataclass
+class Gap:
+    """A stretch where nothing was recorded."""
+
+    start: float
+    end: float
+
+    @property
+    def seconds(self) -> float:
+        return self.end - self.start
+
+    @property
+    def hours(self) -> float:
+        return self.seconds / 3600.0
+
+    def describe(self) -> str:
+        started = time.strftime("%Y-%m-%d %H:%M", time.gmtime(self.start))
+        if self.hours >= 1:
+            return f"{started}Z  ->  {self.hours:.1f}h"
+        return f"{started}Z  ->  {self.seconds / 60:.0f}m"
+
+
 @dataclass
 class Inventory:
     days: list[str] = field(default_factory=list)
     coins: dict[str, CoinInventory] = field(default_factory=dict)
     directory: str = ""
+    #: Stretches with no samples at all, longest first.
+    gaps: list[Gap] = field(default_factory=list)
+    #: Wall-clock span the recordings cover, and how much of it had samples.
+    first_sample: float | None = None
+    last_sample: float | None = None
+    recorded_seconds: float = 0.0
+
+    @property
+    def span_seconds(self) -> float:
+        if self.first_sample is None or self.last_sample is None:
+            return 0.0
+        return self.last_sample - self.first_sample
+
+    @property
+    def uptime(self) -> float | None:
+        """Share of the covered span during which the recorder was running.
+
+        Distinct from `capture_efficiency`, and the two together say what
+        actually went wrong. Low uptime means the process was not running.
+        High uptime with low efficiency means it was running and still not
+        capturing -- a very different bug, and the one worth panicking about.
+        """
+        if self.span_seconds <= 0:
+            return None
+        return max(0.0, min(1.0, self.recorded_seconds / self.span_seconds))
+
+    @property
+    def downtime_hours(self) -> float:
+        return sum(g.seconds for g in self.gaps) / 3600.0
 
     # ---------------- totals ----------------
 
@@ -203,6 +260,7 @@ def take_inventory(directory: Path) -> Inventory:
         return inv
 
     books, settled = load_session(directory)
+    timestamps: list[float] = []
     for ticker, series in books.items():
         if not series:
             continue
@@ -210,6 +268,7 @@ def take_inventory(directory: Path) -> Inventory:
         entry = inv.coins.setdefault(coin, CoinInventory(coin=coin))
         entry.windows += 1
         entry.snapshots += len(series)
+        timestamps.extend(rec.t for rec in series)
         outcome = settled.get(ticker)
         if outcome:
             entry.settled += 1
@@ -217,7 +276,36 @@ def take_inventory(directory: Path) -> Inventory:
                 entry.yes += 1
             else:
                 entry.no += 1
+
+    inv.gaps, inv.recorded_seconds = _coverage(timestamps)
+    if timestamps:
+        inv.first_sample = min(timestamps)
+        inv.last_sample = max(timestamps)
     return inv
+
+
+def _coverage(timestamps: list[float]) -> tuple[list[Gap], float]:
+    """Find the stretches with no samples, and total the time that had them.
+
+    Timestamps come from every ticker interleaved, so they are sorted first
+    and treated as one stream: the recorder is either running or it is not,
+    and a sample from any market proves it was.
+    """
+    if len(timestamps) < 2:
+        return [], 0.0
+
+    ordered = sorted(timestamps)
+    gaps: list[Gap] = []
+    recorded = 0.0
+    for previous, current in zip(ordered, ordered[1:]):
+        delta = current - previous
+        if delta > GAP_THRESHOLD_S:
+            gaps.append(Gap(start=previous, end=current))
+        else:
+            recorded += delta
+
+    gaps.sort(key=lambda g: g.seconds, reverse=True)
+    return gaps, recorded
 
 
 def format_inventory(inv: Inventory) -> str:
@@ -250,15 +338,39 @@ def format_inventory(inv: Inventory) -> str:
     ]
 
     efficiency = inv.capture_efficiency
+    uptime = inv.uptime
     if efficiency is not None and efficiency < 0.5:
         lines += [
             "",
             f"  capture rate      {100 * efficiency:.0f}% of what {len(inv.coins)} "
             f"coins over {len(inv.days)} day(s) could have produced.",
-            "  The recorder was not running for most of that window -- that is a",
-            "  separate problem from needing more days, and no amount of waiting",
-            "  fixes it. Run it somewhere that stays up.",
         ]
+        if uptime is not None:
+            lines.append(f"  uptime            {100 * uptime:.0f}% of the covered span")
+        # The two numbers together say which problem this is.
+        if uptime is not None and uptime < 0.5:
+            lines += [
+                "  The recorder was not running for most of that window -- that is a",
+                "  separate problem from needing more days, and no amount of waiting",
+                "  fixes it. Run it somewhere that stays up.",
+            ]
+        else:
+            lines += [
+                "  The recorder WAS running for most of the span but still captured",
+                "  little. That is not a deployment problem -- look at the recorder",
+                "  itself: discovery returning nothing, or books never settling.",
+            ]
+
+    if inv.gaps:
+        lines += [
+            "",
+            f"  gaps              {len(inv.gaps)}, totalling "
+            f"{inv.downtime_hours:.1f}h with nothing recorded",
+        ]
+        for gap in inv.gaps[:5]:
+            lines.append(f"    {gap.describe()}")
+        if len(inv.gaps) > 5:
+            lines.append(f"    ... and {len(inv.gaps) - 5} more")
 
     lines += ["", "  " + inv.verdict()]
     return "\n".join(lines)

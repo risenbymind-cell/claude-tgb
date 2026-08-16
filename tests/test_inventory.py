@@ -228,6 +228,126 @@ def test_rates_are_unknown_rather_than_wrong_with_no_history():
     assert Inventory().days_remaining() is None
 
 
+# ---------------- coverage and gaps ----------------
+#
+# "1% captured" says how much was missed. It does not say whether the recorder
+# was down or running-and-failing, and those have different fixes. Gaps and
+# uptime are what separate them.
+
+
+def test_continuous_samples_leave_no_gaps(tmp_path):
+    d = tmp_path / "rec"
+    write_day(d, "2026-01-01", [
+        book("KXBTC-A", "BTC", 100.0 + i) for i in range(60)
+    ] + [settle("KXBTC-A", "yes")])
+    inv = take_inventory(d)
+    assert inv.gaps == []
+    assert inv.uptime == pytest.approx(1.0)
+    assert inv.downtime_hours == 0.0
+
+
+def test_a_long_silence_is_a_gap(tmp_path):
+    from kbot.research.inventory import GAP_THRESHOLD_S
+
+    d = tmp_path / "rec"
+    write_day(d, "2026-01-01", [
+        book("KXBTC-A", "BTC", 100.0),
+        book("KXBTC-A", "BTC", 101.0),
+        # ... nothing for an hour ...
+        book("KXBTC-B", "BTC", 101.0 + 3600),
+        book("KXBTC-B", "BTC", 102.0 + 3600),
+        settle("KXBTC-A", "yes"), settle("KXBTC-B", "no"),
+    ])
+    inv = take_inventory(d)
+    assert len(inv.gaps) == 1
+    assert inv.gaps[0].seconds > GAP_THRESHOLD_S
+    assert inv.downtime_hours == pytest.approx(1.0, abs=0.01)
+
+
+def test_ordinary_sampling_jitter_is_not_a_gap(tmp_path):
+    """The recorder samples about once a second. A pause of a few seconds is
+    a retry or a slow response, not the process being down."""
+    d = tmp_path / "rec"
+    write_day(d, "2026-01-01", [
+        book("KXBTC-A", "BTC", 100.0),
+        book("KXBTC-A", "BTC", 130.0),   # 30s later
+        settle("KXBTC-A", "yes"),
+    ])
+    assert take_inventory(d).gaps == []
+
+
+def test_gaps_are_reported_worst_first(tmp_path):
+    d = tmp_path / "rec"
+    write_day(d, "2026-01-01", [
+        book("KXA", "BTC", 0.0),
+        book("KXA", "BTC", 600.0),      # 10m gap
+        book("KXB", "ETH", 600.0 + 7200),  # 2h gap
+        book("KXB", "ETH", 601.0 + 7200),
+    ])
+    gaps = take_inventory(d).gaps
+    assert len(gaps) == 2
+    assert gaps[0].seconds > gaps[1].seconds
+
+
+def test_samples_from_any_market_prove_the_recorder_was_up(tmp_path):
+    """Timestamps are one interleaved stream: the recorder is either running
+    or it is not, and a sample from any coin settles it."""
+    d = tmp_path / "rec"
+    write_day(d, "2026-01-01", [
+        book("KXA", "BTC", 100.0),
+        book("KXB", "ETH", 130.0),
+        book("KXA", "BTC", 160.0),
+    ])
+    assert take_inventory(d).gaps == []
+
+
+def test_uptime_separates_not_running_from_running_and_failing(tmp_path):
+    """The two diagnoses this whole section exists to distinguish."""
+    d = tmp_path / "rec"
+    write_day(d, "2026-01-01", [
+        book("KXA", "BTC", 0.0), book("KXA", "BTC", 60.0),
+        book("KXB", "BTC", 3600.0), book("KXB", "BTC", 3660.0),
+    ])
+    inv = take_inventory(d)
+    assert inv.uptime is not None and inv.uptime < 0.1
+    assert "not running for most" in format_inventory(inv)
+
+
+def test_uptime_is_unknown_rather_than_wrong_without_samples():
+    assert Inventory().uptime is None
+
+
+def test_a_single_sample_yields_no_coverage_claim(tmp_path):
+    """One timestamp is a point, not a span; claiming 100% uptime from it
+    would be the most confident possible statement from the least data."""
+    d = tmp_path / "rec"
+    write_day(d, "2026-01-01", [book("KXA", "BTC", 100.0)])
+    inv = take_inventory(d)
+    assert inv.gaps == []
+    assert inv.uptime is None
+
+
+def test_the_gap_description_is_readable():
+    from kbot.research.inventory import Gap
+
+    assert "h" in Gap(start=0.0, end=7200.0).describe()
+    assert "m" in Gap(start=0.0, end=600.0).describe()
+
+
+def test_the_real_recordings_show_their_gaps():
+    from pathlib import Path
+
+    directory = Path("data/recordings")
+    if not directory.exists() or not list(directory.glob("*.jsonl.gz")):
+        pytest.skip("no recordings checked in")
+    inv = take_inventory(directory)
+    # Whatever the data says, these must be internally consistent.
+    if inv.uptime is not None:
+        assert 0.0 <= inv.uptime <= 1.0
+    assert inv.downtime_hours >= 0
+    assert all(g.seconds > 0 for g in inv.gaps)
+
+
 # ---------------- rendering ----------------
 
 

@@ -838,6 +838,23 @@ class Desk:
                 None if inv.capture_efficiency is None
                 else round(inv.capture_efficiency, 4)
             ),
+            "uptime": None if inv.uptime is None else round(inv.uptime, 4),
+            # Derived rather than read from a heartbeat file: the last record
+            # written *is* the heartbeat, and a separate one could report
+            # healthy while nothing was actually being captured.
+            "last_sample_age_s": (
+                None if inv.last_sample is None else round(now - inv.last_sample)
+            ),
+            "recording_now": (
+                inv.last_sample is not None and (now - inv.last_sample) < 300
+            ),
+            "gaps": [
+                {"start": g.start, "seconds": round(g.seconds),
+                 "describe": g.describe()}
+                for g in inv.gaps[:10]
+            ],
+            "gap_count": len(inv.gaps),
+            "downtime_hours": round(inv.downtime_hours, 2),
             "days_remaining": inv.days_remaining_observed(),
             "days_remaining_ideal": inv.days_remaining(),
             "verdict": inv.verdict(),
