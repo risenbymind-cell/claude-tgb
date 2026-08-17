@@ -65,6 +65,9 @@ class Recorder:
         self._settled: set[str] = set()
         self._empty_passes = 0
         self._stop = asyncio.Event()
+        self._started_at = time.time()
+        self._last_status = 0.0
+        self._last_written = 0
 
     async def run(self, duration: float | None = None) -> None:
         self.feed.start()
@@ -72,6 +75,7 @@ class Recorder:
             asyncio.create_task(self._discovery_loop()),
             asyncio.create_task(self._sample_loop()),
             asyncio.create_task(self._settlement_loop()),
+            asyncio.create_task(self._status_loop()),
         ]
         try:
             if duration:
@@ -97,6 +101,51 @@ class Recorder:
     #: enough not to fire on a blip, short enough to lose almost no data.
     EMPTY_PASSES_BEFORE_RESET = 3
 
+    #: How often to log that the recorder is alive and what it has captured.
+    STATUS_INTERVAL_S = 300.0
+
+    async def _status_loop(self) -> None:
+        """Say something on success, periodically.
+
+        A process that logs only on failure is indistinguishable, in a
+        platform's log viewer, from a process that is not running at all --
+        and "is it actually running" turned out to be the question that
+        mattered most, after a day and a half of silence that nobody could
+        attribute until the recordings were counted.
+
+        The rate is included rather than just the total, because a total that
+        stops climbing is the symptom worth spotting and a bare cumulative
+        number hides it.
+        """
+        while True:
+            await asyncio.sleep(self.STATUS_INTERVAL_S)
+            now = time.time()
+            written = self.writer.written
+            elapsed = now - (self._last_status or self._started_at)
+            recent = written - self._last_written
+            rate = recent / elapsed if elapsed > 0 else 0.0
+            uptime_h = (now - self._started_at) / 3600.0
+
+            message = (
+                "recording: %d markets live, %s records total "
+                "(+%s in the last %.0fm, %.1f/s), up %.1fh"
+            )
+            args = (
+                len(self.discovery.markets), f"{written:,}", f"{recent:,}",
+                elapsed / 60, rate, uptime_h,
+            )
+            # Nothing captured since the last check is the failure this exists
+            # to surface, so it is not logged at the same level as good news.
+            if recent == 0:
+                log.error(
+                    message + " -- NOTHING CAPTURED since the last check", *args
+                )
+            else:
+                log.info(message, *args)
+
+            self._last_status = now
+            self._last_written = written
+
     async def _discovery_loop(self) -> None:
         while True:
             try:
@@ -106,8 +155,6 @@ class Recorder:
                     self._pending_settlement.setdefault(
                         market.ticker, market.close_time
                     )
-            except asyncio.CancelledError:
-                raise
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001 - a bad pass must not stop recording

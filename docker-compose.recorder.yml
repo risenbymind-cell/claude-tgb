@@ -1,0 +1,51 @@
+# The recorder, on its own.
+#
+#   docker compose -f docker-compose.recorder.yml up -d
+#
+# That is the whole setup. No .env, no API keys, no Telegram token, no
+# MASTER_KEY -- Kalshi's order books are public, so recording them needs no
+# credentials of any kind. Verified: the recorder starts and captures with a
+# completely empty environment.
+#
+# This file exists separately from docker-compose.yml because the recorder is
+# the one thing worth running before anything else is configured, and pairing
+# it with services that need secrets would make it look like it needs them
+# too. It also has no inbound port and no order path, so there is nothing to
+# secure and nothing it can spend.
+#
+# Watch it:      docker compose -f docker-compose.recorder.yml logs -f
+# Check it:      python -m kbot.research --dir ./data/recordings inventory
+# Stop it:       docker compose -f docker-compose.recorder.yml down
+
+services:
+  recorder:
+    build: .
+    # The whole point. A recorder that does not survive a reboot is how you
+    # end up with 2% uptime and no idea why.
+    restart: unless-stopped
+    command: >
+      python -m kbot.research
+      --dir /app/data/recordings
+      record --interval 1
+    environment:
+      # Paper is the default anyway; stated so that nothing about this
+      # container could ever be pointed at an order path by an inherited
+      # variable.
+      TRADING_MODE: paper
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      # The recordings are the entire product of this service. Losing them to
+      # a rebuilt container is losing the days it took to gather them.
+      - ./data:/app/data
+    # SIGTERM closes the current gzip file cleanly. Killed instead, the last
+    # buffered block is lost and that day's file can end mid-record.
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    logging:
+      # It logs a status line every five minutes and runs for weeks. Without
+      # a cap that is a slowly growing disk problem on the machine whose disk
+      # is holding the recordings.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
