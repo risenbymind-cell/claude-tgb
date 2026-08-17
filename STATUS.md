@@ -9,27 +9,32 @@ Branch: `claude/telegram-kalshi-bot-ciy8by`
 
 ## The one thing that matters
 
-**No edge has been demonstrated, and there is not enough data to look for one.**
+**No edge exists here, and that is now measured rather than pending.**
 
-A grid of ~4,000 strategy plans was run over the recordings. The best scored
-100% win rate and +$23.74. The same grid run against *shuffled settlements* —
-identical prices and books, outcomes permuted — scored 100% and +$24.12, with
-12/12 shuffles matching or beating the real win rate. The winners were what a
-large search finds in 18 settled markets, not an edge.
+A search of ~4,000 plans returned a best of 100% win rate, +$23.74. Tested on
+**360 settled markets it was never fitted to**, the same plan scored 58.7% and
+**−$83.39**. Across the whole grid on that data, **0 of 620 plans** with ≥30
+trades finished positive.
 
-That number is 18 because the recorder has **2% uptime**:
+The reason is structural, not a matter of searching harder:
 
-```
-capture rate  1% of what 9 coins over 2 days could have produced
-gaps          1, totalling 33.8h with nothing recorded
-```
+- These markets settle on the **CF Benchmarks index**, not on Kalshi's book —
+  the average of 60 one-second samples in the final minute.
+- Kalshi's own price already tracks it to **69% accuracy ten minutes out** and
+  **93% one minute out**. The best plan the search found was 58.7% accurate at
+  the same instant: **less informative than the price it was trading against.**
+- A spot-based model built from public data is a **worse forecast** than the
+  market price (Brier 0.1785 vs 0.1743).
+- The professional edge sits behind **licensed second-resolution index data**,
+  which is the one input that cannot be reached publicly.
 
-It was started, ran briefly, stopped, and was not running for the next day and
-a half. Nothing else in the project can be concluded until this is fixed, and
-it is a deployment problem rather than a code one.
+Full workings: `research/FINDINGS.md`, `WHAT_BOTS_ACTUALLY_DO.md`,
+`SPOT_INDEX_TEST.md`, and `HOW_TO_FIND_ONE.md` for where to look instead.
 
-**Next action: start the recorder somewhere that stays up.** See `RECORDER.md`.
-It needs no credentials of any kind and runs with one command.
+**The honest recommendation is to stop searching this market.** If you want to
+keep going, `HOW_TO_FIND_ONE.md` §"What I would do next" is the shortest path,
+and it starts with running the recorder — which is still at **2% uptime**, one
+33.8-hour gap. See `RECORDER.md`; it needs no credentials and one command.
 
 ---
 
@@ -43,11 +48,14 @@ It needs no credentials of any kind and runs with one command.
 | **Sandbox** (`--sandbox`) | Real market data, no credentials, no order path, safe to expose |
 | **Recorder** | One-command deploy, heartbeat logging every 5 min |
 | **Research tab** | Distance to a statistically meaningful verdict |
-| **Self-tests** | Ten checks doing real operations against the live process |
+| **Self-tests** | Ten checks doing real operations, from the desk or `/selftest` |
 | **Latency** | P50/P95/P99 per stage |
+| **Out-of-sample testing** | `research/history.py` — scores a plan on Kalshi's own settled markets |
+| **Safety** | Single-instance lock; duplicate in-flight intents refused; kill switch with four inputs |
+| **Container** | Built, run against live Kalshi, non-root, healthcheck verified |
 | **Public site** | Live at the github.io URL |
 
-705 tests passing. `python -m pytest -q`
+757 tests passing. `python -m pytest -q`
 
 ---
 
@@ -77,6 +85,16 @@ commit.
 at a different host, gated behind two typed phrases plus two environment
 variables. I could not test it without real money at risk.
 
+**5. Phases 2–10 of the original spec are mostly unbuilt.** `UPGRADE.md` §9
+carries the current state. The largest genuine gaps are the feature pipeline
+(~8 of 28 features, offline only), the execution engine (no post-only,
+cancel/replace or queue awareness), and ~6 of 22 risk limits with no circuit
+breakers.
+
+**6. No leader election.** `kbot/lock.py` *refuses* a second instance rather
+than coordinating one, which is the right trade for a single-operator
+deployment and wrong for a highly available one.
+
 ---
 
 ## Things worth not re-learning
@@ -103,15 +121,18 @@ variables. I could not test it without real money at risk.
 ```
 kbot/
   webui/          the desk: desk.py (state), server.py (HTTP),
-                  auth.py, selftest.py, latency.py
-  research/       recorder.py, inventory.py, search.py, signals.py,
-                  calibrate.py, replay.py
+                  auth.py, latency.py
+  research/       recorder.py, inventory.py, history.py, search.py,
+                  signals.py, calibrate.py, replay.py
   engine/         broker.py (paper + live), discovery.py, runner.py
   strategy/       directional.py — five presets
   safety.py       TradingMode, KillSwitch, clock drift
+  selftest.py     live checks, shared by the desk and the bot
+  lock.py         one trader per account
 site/             index.html, app.html, desk.html, login.html
 docs/             generated from site/ by scripts/build-site.py
 ```
 
 Read `DEPLOY.md` for hosting, `RECORDER.md` for the recorder, `UPGRADE.md` for
-the architecture pass and the bugs it found.
+the architecture pass and the bugs it found, and `research/` for the edge
+question, which is answered rather than open.

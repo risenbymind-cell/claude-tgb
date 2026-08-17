@@ -1,10 +1,23 @@
 # Trading platform upgrade — status
 
 Against a ten-phase specification. **Phase 1 is complete. Phases 2–10 are
-not started**, except where earlier work already covered part of them.
+largely not started**, except where later work has covered part of them —
+see the table in §9, which is kept current rather than left at its first
+draft.
 
 This document is the honest ledger: what exists, what it defends against, what
 it does not, and what a reasonable next step is. Nothing here claims an edge.
+
+**On the edge question specifically**, the ledger is now conclusive rather than
+pending, and lives in three documents:
+
+- `research/FINDINGS.md` — the 100%-win-rate plan tested on 360 out-of-sample
+  markets. It loses money, and no variant of it can work.
+- `research/WHAT_BOTS_ACTUALLY_DO.md` — why: these markets settle on an
+  external index the Kalshi price already tracks to 69% accuracy ten minutes
+  out and 93% one minute out.
+- `research/SPOT_INDEX_TEST.md` — the best remaining idea, tested. A
+  spot-based model is a *worse* forecast than the market price.
 
 ---
 
@@ -313,17 +326,28 @@ out-of-sample period. There is no such evidence today.
 
 Phases 2–10 remain. In priority order:
 
-| Phase | Gap |
+| Phase | State |
 |---|---|
-| 2 | Latency instrumentation (p50/p95/p99 per stage); bounded queues; monotonic clocks throughout; REST polling still runs alongside a healthy socket |
+| 2 | **Partly done.** Latency instrumentation exists (`webui/latency.py`, p50/p95/p99 per stage, on the Risk tab). Still missing: bounded queues, monotonic clocks throughout, and REST polling still runs alongside a healthy socket. Clock drift is checked on demand via self-test rather than continuously. |
 | 3 | Feature pipeline — roughly 8 of ~28 specified features exist, in `research/signals.py`, and only offline |
 | 4 | Strategy ensemble; strategies do not return edge/slippage/adverse-selection estimates |
-| 5 | Fair-value and calibration layer; Brier score, log loss, calibration curve |
-| 6 | Execution engine — no post-only, cancel/replace, queue awareness, or maker/taker logic |
+| 5 | **Partly done.** Calibration and Brier scoring exist and have been run (`research/calibrate.py`, and the Brier comparison in `SPOT_INDEX_TEST.md`). No live fair-value layer. |
+| 6 | Execution engine — no post-only, cancel/replace, or queue awareness. Maker/taker is now a choice at the call site (`sell(..., time_in_force=)`) rather than hardcoded. |
 | 7 | ~6 of ~22 risk limits exist; no circuit breakers |
-| 8 | Walk-forward validation; replay does not model queue position or latency |
-| 9 | 3 of 15 specified commands (`/health`, `/kill`, `/resume`) |
+| 8 | Walk-forward validation; replay does not model queue position or latency. **Out-of-sample testing now exists** (`research/history.py`, `python -m kbot.research history`) against Kalshi's own settled markets. |
+| 9 | **6 of 15** specified commands: `/health`, `/kill`, `/resume`, `/data`, `/selftest`, `/status` |
 | 10 | Property-based tests; no benchmark suite |
+
+Since the first draft, several items outside the phase list have also been
+built or found:
+
+- **Single-instance lock** (`kbot/lock.py`) — two processes against one account
+  would double every position with both ledgers balancing.
+- **Duplicate in-flight intents are refused**, closing limitation 6 below.
+- **Partial fills are managed**, not merely reported — closing limitation 5.
+- **The Docker image has been built and run**, closing limitation 8, and doing
+  so exposed two real bugs in the healthcheck.
+- **Graceful SIGTERM shutdown**, verified end to end.
 
 **No performance benchmark and no replay benchmark exist.** Both are
 deliverables in the specification and both are absent — publishing a number I
@@ -333,27 +357,42 @@ have not measured would be the same failure as a fabricated backtest.
 
 ## 10 — Limitations and known risks
 
-1. **No demonstrated edge.** The bundled strategies are reference
-   implementations. Every result so far is either not significant or an
-   artifact. Do not fund this.
-2. **Insufficient data.** `signals` requires 200 distinct 15-minute windows and
-   currently has ~1. Nine coins in the same quarter hour ride the same crypto
-   tape — that is closer to one observation than nine, and the tool withholds
-   all verdicts below the threshold for exactly that reason.
+1. **No demonstrated edge, and now a measured reason.** Not merely "nothing
+   found yet": the best plan from a 4,000-strategy search lost $83 over 360
+   out-of-sample markets, 0 of 620 plans were profitable, and the market's own
+   price forecasts better than any model built here. See the three research
+   documents linked at the top. Do not fund this.
+2. **Insufficient local data**, and the recorder is the reason. `signals`
+   requires 200 distinct windows; the recordings hold 18, at **2% uptime**
+   across one 33.8-hour gap. Nine coins in the same quarter hour ride the same
+   tape — closer to one observation than nine — and the tooling withholds
+   verdicts below the threshold for exactly that reason. Out-of-sample testing
+   now bypasses this via Kalshi's own history, but live feature work still
+   needs the recorder running.
 3. **REST polling still runs** beside the websocket. Correct but wasteful, and
    Phase 2 asks for it to stop.
 4. **Market impact is not modelled** anywhere. Replay results at size are
    optimistic.
-5. **Partial fills are reported, not managed.** Reconciliation surfaces them;
-   nothing closes them automatically.
-6. **The intent log is not yet consulted before submission.** It records and
-   recovers; it does not yet refuse a duplicate in-flight intent.
-7. **Single-process.** No leader election. Two instances against one account
-   would double every position, and nothing detects that.
-8. **The Docker image has never been built** — no daemon in the development
-   environment. CI's docker job is its first real execution.
-9. **Clock drift is checked at startup only.** Phase 2 asks for continuous
-   monitoring.
+5. ~~Partial fills are reported, not managed.~~ **Fixed.** A partial exit now
+   books the filled slice with a pro-rata share of the entry fee and keeps the
+   remainder open, rather than claiming a full round trip on contracts still
+   held.
+6. ~~The intent log is not consulted before submission.~~ **Fixed.** An
+   unresolved intent for the same account, market, side and action within 120s
+   refuses a second submission. Bounded by age deliberately: an hour-old
+   pending intent is crash wreckage, and blocking that market until someone
+   reconciles by hand would turn a recoverable state into an outage.
+7. ~~Single-process, nothing detects a second instance.~~ **Fixed.**
+   `kbot/lock.py` takes an exclusive flock beside the database before anything
+   trades. Live and paper take different locks. Still no leader election — this
+   refuses a second instance rather than coordinating one.
+8. ~~The Docker image has never been built.~~ **Built and run**, against live
+   Kalshi: 221MB, non-root, recorder captured real data and the desk served
+   /healthz from inside the container. Two healthcheck bugs found and fixed in
+   the process, both now covered in CI.
+9. **Clock drift is checked at startup and on demand** (`/selftest`, and the
+   desk's Risk tab). Phase 2 asks for continuous monitoring; that is still
+   missing.
 10. **Paper fills are optimistic.** They assume the resting size at the touch
     is available and ignore queue position — the direction of that error is
     toward flattering results.
