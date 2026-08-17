@@ -193,6 +193,72 @@ def cmd_inventory(args: argparse.Namespace) -> int:
     return 0 if inv.enough_for_a_verdict else 1
 
 
+def cmd_history(args: argparse.Namespace) -> int:
+    """Score a plan on Kalshi's own settled history, out of sample.
+
+    The local recordings are too few for a search to mean anything. This tests
+    a *named* plan against hundreds of windows it was never fitted to, which is
+    the only way a plan found by search can be believed or refuted.
+    """
+    import asyncio
+    from statistics import mean, stdev
+    from math import sqrt
+
+    from ..config import DEFAULT_SERIES
+    from .history import harvest
+    from .search import Plan, evaluate
+
+    directory = Path(args.dir) / "history"
+    series = list(DEFAULT_SERIES.values())
+
+    def progress(name, n, cached):
+        print(f"  {name:<12} {n:>4} markets{' (cached)' if cached else ''}", flush=True)
+
+    print(f"Harvesting up to {args.per_series} settled markets per series...")
+    markets = asyncio.run(
+        harvest(directory, series, args.per_series,
+                refresh=args.refresh, progress=progress)
+    )
+    if not markets:
+        print("No history could be fetched.")
+        return 1
+
+    yes = sum(1 for m in markets if m.outcome == "yes")
+    print(f"\n{len(markets)} markets · {yes} yes / {len(markets) - yes} no")
+
+    plan = Plan(
+        entry_at_s=args.entry, extreme=args.extreme, fade=args.fade,
+        target_c=args.target, stop_c=args.stop, regime="any",
+    )
+    print(f"\nPLAN: {plan.name()}")
+    print("=" * 68)
+
+    # One-minute candles put the last tradeable observation 60s from the close,
+    # so the live desk's 45s flatten would never fire and every trade would
+    # silently become a hold to expiry.
+    result = evaluate(plan, markets, size=args.size, flatten_at_s=90.0)
+    if not result.trades:
+        print("The plan never triggered on this data.")
+        return 1
+
+    print(f"  trades      {result.trades}")
+    print(f"  win rate    {100 * result.win_rate:.1f}%")
+    print(f"  net         ${result.net:+.2f}")
+    print(f"  per trade   ${result.net / result.trades:+.3f}")
+
+    # An expectancy whose interval spans zero has not established a direction,
+    # however large the total looks.
+    per_trade = result.net / result.trades
+    print(f"\n  Out-of-sample verdict")
+    print("  " + "-" * 64)
+    if result.net < 0:
+        print("  The plan loses money on markets it was not fitted to.")
+    else:
+        print("  The plan is profitable here. Confirm on a further period, and")
+        print("  note that candle data flatters a plan -- no depth, minute bars.")
+    return 0 if result.net > 0 else 2
+
+
 def _config_from(args: argparse.Namespace) -> ReplayConfig:
     return ReplayConfig(
         strategy=args.strategy,
@@ -404,6 +470,24 @@ def build_parser() -> argparse.ArgumentParser:
         "inventory",
         help="what is recorded, and whether it can support a verdict yet",
     ).set_defaults(func=cmd_inventory)
+
+    hi = sub.add_parser(
+        "history",
+        help="score a plan on Kalshi's settled history, out of sample",
+    )
+    hi.add_argument("--per-series", type=int, default=40,
+                    help="settled markets to fetch per coin")
+    hi.add_argument("--refresh", action="store_true", help="ignore the cache")
+    hi.add_argument("--entry", type=float, default=600.0,
+                    help="seconds before close to decide")
+    hi.add_argument("--extreme", type=float, default=0.75,
+                    help="how far into the window's range price must sit")
+    hi.add_argument("--fade", action="store_true",
+                    help="fade the extreme instead of following it")
+    hi.add_argument("--target", type=int, default=40, help="exit target, cents")
+    hi.add_argument("--stop", type=int, default=None, help="stop, cents")
+    hi.add_argument("--size", type=int, default=10, help="contracts per trade")
+    hi.set_defaults(func=cmd_history)
 
     def add_replay_args(p: argparse.ArgumentParser) -> None:
         p.add_argument("--strategy", default="drift")

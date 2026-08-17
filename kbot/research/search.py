@@ -187,7 +187,23 @@ class Result:
         return self.net_dc / 1000
 
 
-def evaluate(plan: Plan, markets: list[Market], size: int = 10) -> Result:
+def evaluate(
+    plan: Plan,
+    markets: list[Market],
+    size: int = 10,
+    *,
+    flatten_at_s: float = 45.0,
+) -> Result:
+    """Score one plan.
+
+    `flatten_at_s` is the point at which an open position is closed at the
+    prevailing bid rather than carried into settlement. The default matches the
+    live desk. It is a parameter because the frame spacing of the data decides
+    what is reachable: recorded books arrive about once a second, but Kalshi's
+    historical candlesticks are one a minute, so the last tradeable observation
+    before a close sits 60s out and a 45s threshold would never fire -- turning
+    every trade into a hold-to-expiry without saying so.
+    """
     trades = wins = net = 0
     for m in markets:
         if plan.regime != "any" and m.regime != plan.regime:
@@ -225,7 +241,7 @@ def evaluate(plan: Plan, markets: list[Market], size: int = 10) -> Result:
             if stop is not None and bid <= stop:
                 exit_dc = bid
                 break
-            if sec <= 45.0:
+            if sec <= flatten_at_s:
                 exit_dc = bid
                 break
         if exit_dc is None:
