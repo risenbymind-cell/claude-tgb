@@ -93,3 +93,28 @@ jobs:
           test "$code" -eq 2 || { echo "expected exit 2, got $code"; exit 1; }
           echo "$out" | grep -q "config error" || {
             echo "expected a clean config error, not a traceback"; exit 1; }
+
+      - name: The baked-in healthcheck passes for the desk, behind a proxy
+        run: |
+          # Two regressions this covers, both found by building the image for
+          # the first time and running the desk in it:
+          #   1. HEALTHCHECK was hardcoded to the bot's port, so the desk
+          #      container was permanently unhealthy while working fine.
+          #   2. urllib honours HTTP_PROXY even for 127.0.0.1, so any host
+          #      with a proxy set failed the check for the same reason.
+          docker run -d --name hc \
+            -e TRADING_MODE=paper -e HEALTHCHECK_PORT=8787 \
+            -e HTTP_PROXY=http://127.0.0.1:9 -e HTTPS_PROXY=http://127.0.0.1:9 \
+            -p 127.0.0.1:8787:8787 \
+            directionalbot:ci python -m kbot.webui --sandbox --host 0.0.0.0 --port 8787
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' hc)
+            [ "$status" = "healthy" ] && break
+            [ "$status" = "unhealthy" ] && break
+            sleep 5
+          done
+          docker logs hc | tail -20
+          docker inspect --format '{{range .State.Health.Log}}exit={{.ExitCode}} {{end}}' hc
+          test "$(docker inspect --format '{{.State.Health.Status}}' hc)" = "healthy" \
+            || { echo "the desk container reported unhealthy"; exit 1; }
+          docker rm -f hc

@@ -12,7 +12,7 @@ services:
       # front of this — see deploy/Caddyfile.
       - "127.0.0.1:8080:8080"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      test: ["CMD", "python", "-c", "import urllib.request as u;u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8080/healthz',timeout=4)"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -36,6 +36,10 @@ services:
       # Caddy terminates TLS and forwards; this lets the desk see the real
       # client address for lockout, and mark its cookie Secure.
       DESK_TRUST_PROXY: "1"
+      # The image's baked-in healthcheck defaults to the bot's port. Without
+      # this the desk container is marked unhealthy while working perfectly,
+      # and an orchestrator restarts it.
+      HEALTHCHECK_PORT: "8787"
     volumes:
       - ./data:/app/data
       - ./secrets:/app/secrets:ro
@@ -43,7 +47,7 @@ services:
       # Loopback only -- the TLS proxy is what faces the world.
       - "127.0.0.1:8787:8787"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8787/healthz')"]
+      test: ["CMD", "python", "-c", "import urllib.request as u;u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:8787/healthz',timeout=4)"]
       interval: 30s
       timeout: 5s
       retries: 3

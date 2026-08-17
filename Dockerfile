@@ -26,9 +26,21 @@ RUN useradd --create-home --uid 10001 kbot \
 USER kbot
 
 # Baked into the image so `docker run` and orchestrators get it too, not just
-# compose. Only meaningful when the webhook listener is enabled.
+# compose.
+#
+# The port is read from the environment rather than hardcoded, because one
+# image runs two services: the bot serves /healthz on 8080 and the desk on
+# 8787. A fixed 8080 meant that running this image as the desk marked the
+# container permanently unhealthy -- and an orchestrator responds to that by
+# restarting a process that was working correctly. Found by building the
+# image and running the desk in it.
+ENV HEALTHCHECK_PORT=8080
+# ProxyHandler({}) is not decoration: urllib honours HTTP_PROXY even for a
+# 127.0.0.1 URL, so on any host that sets one -- which is most corporate and
+# some cloud environments -- the check would route a loopback request through
+# a proxy, fail, and mark a perfectly healthy container unhealthy.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/healthz')" \
+  CMD python -c "import os,urllib.request as u;u.build_opener(u.ProxyHandler({})).open('http://127.0.0.1:'+os.environ.get('HEALTHCHECK_PORT','8080')+'/healthz',timeout=4)" \
       || exit 1
 
 CMD ["python", "-m", "kbot"]
