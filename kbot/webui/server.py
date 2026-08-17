@@ -618,4 +618,16 @@ class DeskServer:
                 result = await self.desk.reconcile()
                 return _json({**result, "state": self.desk.snapshot()})
 
+            if path == "/api/selftest":
+                from .selftest import run_selftest
+
+                report = await run_selftest(self.desk)
+                payload = report.to_dict()
+                self.desk.log_audit("operator", "selftest", {
+                    "ok": payload["ok"], "summary": payload["summary"],
+                    "failed": [c["name"] for c in payload["checks"]
+                               if c["status"] == "fail"],
+                })
+                return _json({**payload, "state": self.desk.snapshot()})
+
         return _json({"error": "not found"}, "404 Not Found")

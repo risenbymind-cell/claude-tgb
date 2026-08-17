@@ -626,10 +626,25 @@ footer p{max-width:80ch}
 
 <!-- ================= AUDIT ================= -->
 <section class="tabpanel" id="tab-audit">
+  <h2>Self-tests</h2>
+  <p class="hint">Runs the real operations against this process — makes the request, writes the file,
+    signs the message. A check that reads a setting and reports OK is worse than no check, because it
+    turns an unknown into a false reassurance. No order is ever placed.</p>
+  <div class="panel panel-pad">
+    <button id="selftest-run">Run self-tests</button>
+    <div class="msg" id="selftest-msg"></div>
+    <div class="tablewrap" id="selftest-wrap" hidden style="margin-top:14px">
+      <table>
+        <thead><tr><th>Check</th><th>Result</th><th class="num">Took</th><th>Detail</th></tr></thead>
+        <tbody id="selftest"></tbody>
+      </table>
+    </div>
+  </div>
+
   <h2>Audit log</h2>
-  <p class="hint">Every command, kill, arming step, connect and engine boot — newest first. Secrets are
-    redacted before anything is written: the connect action logs a masked key ID and a fingerprint,
-    never the key itself.</p>
+  <p class="hint">Every command, kill, arming step, connect, self-test and engine boot — newest first.
+    Secrets are redacted before anything is written: the connect action logs a masked key ID and a
+    fingerprint, never the key itself.</p>
   <div class="tablewrap">
     <table>
       <thead><tr><th class="num">When</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead>
@@ -1318,6 +1333,32 @@ $("conn-submit").onclick = async () => {
       m.textContent = r.error; m.className = "msg err";
     }
   } catch (e) { m.textContent = e.message; m.className = "msg err"; }
+};
+
+$("selftest-run").onclick = async () => {
+  const btn = $("selftest-run"), msg = $("selftest-msg");
+  btn.disabled = true;
+  msg.textContent = "running…"; msg.className = "msg";
+  try {
+    const r = await api("/api/selftest", {});
+    if (r.state) render(r.state);
+    msg.textContent = `${r.summary} (${(r.duration_ms / 1000).toFixed(1)}s)`;
+    msg.className = "msg " + (r.ok ? "ok" : "err");
+    $("selftest-wrap").hidden = false;
+    const badge = {pass: "ok", warn: "no", fail: "bad"};
+    $("selftest").innerHTML = r.checks.map((c) => `
+      <tr>
+        <td data-k="check" class="mono"><b>${esc(c.name)}</b></td>
+        <td data-k="result"><span class="card-label">Result</span>
+          <span class="badge ${badge[c.status]}">${c.status}</span></td>
+        <td data-k="took" class="num dim"><span class="card-label">Took</span>${c.duration_ms.toFixed(0)}ms</td>
+        <td data-k="detail" class="dim"><span class="card-label">Detail</span>${esc(c.detail)}</td>
+      </tr>`).join("");
+  } catch (e) {
+    msg.textContent = e.message; msg.className = "msg err";
+  } finally {
+    btn.disabled = false;
+  }
 };
 
 $("c-signout").onclick = logout;
