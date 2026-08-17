@@ -38,6 +38,21 @@ def cmd_search(args: argparse.Namespace) -> int:
     print(f"\n{len(markets)} settled market(s) · {len(plans):,} plans")
     print("regimes: " + ", ".join(f"{k}={v}" for k, v in sorted(regimes.items())))
 
+    # Said before the results, not after. A reader who scans the top of this
+    # output and stops will otherwise see a 100% win rate presented as a
+    # finding, and the caveat that unmakes it sits below the fold.
+    from .signals import MIN_WINDOWS
+
+    if len(markets) < MIN_WINDOWS:
+        print()
+        print("  " + "!" * 68)
+        print(f"  {len(markets)} settled markets is below the {MIN_WINDOWS} needed for")
+        print("  a search this size to mean anything. Searching 4,000 plans over")
+        print("  a sample this small WILL produce excellent-looking winners --")
+        print("  that is arithmetic, not discovery. The null calibration at the")
+        print("  bottom is the only part of this output worth reading.")
+        print("  " + "!" * 68)
+
     real = run_grid(markets, plans, args.min_trades)
     if not real:
         print(f"\nNo plan reached {args.min_trades} trades. Keep recording.")
@@ -91,10 +106,20 @@ def cmd_search(args: argparse.Namespace) -> int:
         print("  still produces winners just as good. That is what searching a")
         print("  large space over few markets buys you, and it is worth nothing.")
         print("  The fix is more settled markets, not more plans.")
-    else:
-        print("  The best real plan beats what the same search extracts from")
-        print("  noise. That is necessary, not sufficient: confirm it on a")
-        print("  period this search never saw before believing it.")
+        # Exit 2, so `search && something` cannot proceed on noise. A command
+        # that prints "worth nothing" and then reports success to the shell is
+        # inviting exactly the automation this whole pass exists to prevent.
+        return 2
+
+    print("  The best real plan beats what the same search extracts from")
+    print("  noise. That is necessary, not sufficient: confirm it on a")
+    print("  period this search never saw before believing it.")
+    if len(markets) < MIN_WINDOWS:
+        print()
+        print(f"  Note: this passed on {len(markets)} markets, below the "
+              f"{MIN_WINDOWS} threshold.")
+        print("  Passing a null test on a small sample is itself a coin flip.")
+        return 2
     return 0
 
 

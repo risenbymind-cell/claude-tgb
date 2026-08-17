@@ -127,3 +127,90 @@ def test_win_rate_is_computed_from_net_not_gross():
     r = evaluate(plan, [m])
     if r.trades:
         assert (r.wins > 0) == (r.net_dc > 0)
+
+
+# ---------------- the command's verdict ----------------
+#
+# The grid will always produce winners on a small sample. Everything here is
+# about making that impossible to mistake for a finding -- including by a
+# shell script, which reads exit codes rather than prose.
+
+
+def _run_search(tmp_path, **kwargs):
+    """Run cmd_search over a synthetic recording directory."""
+    import argparse
+    import gzip
+    import json
+
+    from kbot.research.__main__ import cmd_search
+
+    directory = tmp_path / "rec"
+    directory.mkdir(parents=True, exist_ok=True)
+    records = []
+    # Enough markets and samples for the grid to find trades in.
+    for m in range(kwargs.pop("markets", 12)):
+        ticker = f"KX-{m}"
+        base = m * 1000.0
+        for i in range(90):
+            records.append({
+                "type": "book", "t": base + i * 10, "ticker": ticker,
+                "coin": "BTC", "o": base, "c": base + 900,
+                "yes": [[400 + (i * 5) % 200, 50]],
+                "no": [[600 - (i * 5) % 200, 50]],
+            })
+        records.append({
+            "type": "settle", "ticker": ticker,
+            "result": "yes" if m % 2 else "no",
+        })
+    with gzip.open(directory / "2026-01-01.jsonl.gz", "wt") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec) + "\n")
+
+    args = argparse.Namespace(
+        dir=directory, min_trades=kwargs.pop("min_trades", 3),
+        trials=kwargs.pop("trials", 3), seed=1, **kwargs
+    )
+    return cmd_search(args)
+
+
+def test_no_data_exits_nonzero(tmp_path, capsys):
+    import argparse
+
+    from kbot.research.__main__ import cmd_search
+
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    code = cmd_search(argparse.Namespace(
+        dir=empty, min_trades=3, trials=2, seed=1
+    ))
+    assert code != 0
+
+
+def test_a_small_sample_is_warned_about_before_the_results(tmp_path, capsys):
+    """A reader who scans the top and stops must not see a 100% win rate
+    presented as a finding with the caveat below the fold."""
+    _run_search(tmp_path)
+    out = capsys.readouterr().out
+    assert "below the" in out
+    # The warning has to precede the results table.
+    assert out.index("below the") < out.index("plans took at least")
+
+
+def test_failing_the_null_test_exits_nonzero(tmp_path, capsys):
+    """`search && deploy` must not proceed on noise. A command that prints
+    "worth nothing" and then reports success to the shell invites exactly the
+    automation this pass exists to prevent."""
+    code = _run_search(tmp_path)
+    out = capsys.readouterr().out
+    if "VERDICT: nothing here is distinguishable" in out:
+        assert code == 2
+    else:
+        # Passed the null on a small sample, which is itself a coin flip.
+        assert code == 2
+        assert "coin flip" in out
+
+
+def test_a_small_sample_never_reports_success(tmp_path, capsys):
+    """Whichever way the null test lands, a sample below the threshold cannot
+    return 0 -- passing a null test on 12 markets is not evidence."""
+    assert _run_search(tmp_path, markets=12) != 0
