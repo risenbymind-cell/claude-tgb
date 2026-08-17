@@ -238,6 +238,81 @@ def analyse(
     return [b for b in found if b is not None]
 
 
+#: Entry times to scan, in seconds before close. A claim about price bias must
+#: hold at every one of them: the assertion "a 92c contract is underpriced" says
+#: nothing about the clock.
+SCAN_TIMES: tuple[float, ...] = (780.0, 600.0, 450.0, 300.0, 180.0, 120.0)
+
+#: Cells smaller than this are not evidence in either direction.
+SCAN_MIN_N = 100
+
+#: Two-sided 95%.
+SIGNIFICANT_T = 1.96
+
+
+@dataclass(frozen=True)
+class Scan:
+    """Every (entry time, band) cell, and how many of them a coin flip explains.
+
+    This exists because of a mistake made in this project twice. Picking the
+    best cell out of a grid and reporting its t-statistic is not a finding: with
+    46 cells at 95% confidence, about 2.3 will clear the bar in each direction
+    from noise alone. The number that means something is *how many* cleared it,
+    against how many were expected to.
+    """
+
+    cells: list[tuple[float, Band]]
+    n_trades: int
+    net_total: float
+
+    @property
+    def positive(self) -> list[tuple[float, Band]]:
+        return [c for c in self.cells if c[1].net_t > SIGNIFICANT_T]
+
+    @property
+    def negative(self) -> list[tuple[float, Band]]:
+        return [c for c in self.cells if c[1].net_t < -SIGNIFICANT_T]
+
+    @property
+    def expected_by_chance(self) -> float:
+        """Cells expected to clear the bar in one direction under the null."""
+        return len(self.cells) * (1 - 0.95) / 2
+
+    @property
+    def net_mean(self) -> float:
+        return self.net_total / self.n_trades if self.n_trades else 0.0
+
+
+def scan(
+    markets: list[Market],
+    *,
+    size: int = DEFAULT_SIZE,
+    times: tuple[float, ...] = SCAN_TIMES,
+    bands: tuple[tuple[int, int], ...] = DEFAULT_BANDS,
+    min_n: int = SCAN_MIN_N,
+) -> Scan:
+    """Score every band at every entry time, and count the survivors.
+
+    Cells are not independent -- a market can appear at several entry times, and
+    the two sides of one market appear in two bands -- so the chance expectation
+    is a floor rather than an exact figure. It is still the right comparison:
+    finding one significant cell where chance predicts two is not a discovery.
+    """
+    cells: list[tuple[float, Band]] = []
+    n_trades = 0
+    net_total = 0.0
+    for at in times:
+        trades = trades_from(markets, entry_at_s=at, size=size)
+        for low, high in bands:
+            band = summarise(trades, low, high)
+            if band is None or band.n < min_n:
+                continue
+            cells.append((at, band))
+            n_trades += band.n
+            net_total += band.net_total
+    return Scan(cells=cells, n_trades=n_trades, net_total=net_total)
+
+
 #: Resamples for a bootstrap interval. Enough that the 2.5th percentile is
 #: estimated from ~250 resamples rather than a handful.
 BOOTSTRAP_N = 10_000

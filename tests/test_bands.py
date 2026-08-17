@@ -8,12 +8,16 @@ project before, and both fail silently.
 
 from __future__ import annotations
 
+import pytest
+
 from kbot.kalshi.fees import fee_dc
 from kbot.research.bands import (
     DEFAULT_BANDS,
+    SCAN_MIN_N,
     analyse,
     bootstrap_ci,
     close_time_of,
+    scan,
     split_chronologically,
     summarise,
     trades_from,
@@ -201,3 +205,50 @@ def test_losses_and_wins_account_for_every_trade():
           for i in range(1, 11)]
     band = summarise(trades_from(ms, entry_at_s=600.0, size=1), 900, 980)
     assert band.wins + band.losses == band.n
+
+
+# --- the scan, which is what stops one lucky cell being read as a finding ---
+
+
+def wide(ticker, outcome, yes_ask):
+    """A market quoted at one price for the whole window."""
+    return market(ticker, outcome, [(sec, yes_ask) for sec in range(900, 60, -60)])
+
+
+def test_a_small_cell_is_not_evidence():
+    ms = [wide(f"KXBTC15M-26AUG17{i:02d}00-00", "yes", 900) for i in range(1, 13)]
+    assert scan(ms, size=1).cells == [], "a cell below the floor must not count"
+
+
+def test_the_chance_expectation_scales_with_the_grid():
+    """The whole point of the scan: one significant cell out of fifty is what
+    noise looks like, and the report has to say so without being asked."""
+    ms = [wide(f"KXBTC15M-26AUG{d:02d}{h:02d}00-00", "yes" if i % 4 else "no", 900)
+          for i, (d, h) in enumerate(
+              [(d, h) for d in range(11, 18) for h in range(0, 24)])]
+    result = scan(ms, size=1)
+    assert result.cells, "fixture too small to produce any cell"
+    assert result.expected_by_chance == pytest.approx(len(result.cells) * 0.025)
+
+
+def test_a_cell_is_counted_once_per_entry_time():
+    ms = [wide(f"KXBTC15M-26AUG17{i:02d}00-00", "yes" if i % 4 else "no", 900)
+          for i in range(1, SCAN_MIN_N * 2)]
+    result = scan(ms, size=1, times=(600.0, 300.0))
+    times = [at for at, _ in result.cells]
+    assert set(times) == {600.0, 300.0}
+
+
+def test_the_pooled_total_matches_the_cells_it_came_from():
+    ms = [wide(f"KXBTC15M-26AUG17{i:02d}00-00", "yes" if i % 4 else "no", 900)
+          for i in range(1, SCAN_MIN_N * 2)]
+    result = scan(ms, size=1, times=(600.0,))
+    assert result.n_trades == sum(b.n for _, b in result.cells)
+    assert result.net_total == sum(b.net_total for _, b in result.cells)
+
+
+def test_significance_is_split_by_sign_not_magnitude():
+    ms = [wide(f"KXBTC15M-26AUG17{i:02d}00-00", "yes", 900)
+          for i in range(1, SCAN_MIN_N * 2)]
+    result = scan(ms, size=1, times=(600.0,))
+    assert not (set(result.positive) & set(result.negative))

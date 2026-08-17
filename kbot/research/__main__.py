@@ -203,7 +203,8 @@ def cmd_bands(args: argparse.Namespace) -> int:
     """
     from ..config import DEFAULT_SERIES
     from .bands import (
-        analyse, bootstrap_ci, split_chronologically, summarise, trades_from,
+        SCAN_MIN_N, SIGNIFICANT_T, analyse, bootstrap_ci, scan,
+        split_chronologically, summarise, trades_from,
     )
     from .history import load_cached
 
@@ -215,6 +216,29 @@ def cmd_bands(args: argparse.Namespace) -> int:
         print(f"No harvested history in {directory}.")
         print("Run: python -m kbot.research history --per-series 600")
         return 1
+
+    if args.scan:
+        result = scan(markets, size=args.size)
+        print(f"{len(markets)} markets · {len(result.cells)} cells with "
+              f"n>={SCAN_MIN_N}\n")
+        print(f"{'entry':>7} {'band':>10} {'n':>6} {'win%':>7} {'edge':>7} "
+              f"{'per trade':>10} {'t':>7}")
+        for at, band in result.cells:
+            mark = ""
+            if band.net_t > SIGNIFICANT_T:
+                mark = "  <-"
+            elif band.net_t < -SIGNIFICANT_T:
+                mark = "  x"
+            print(f"  T-{at:<4.0f} {band.low_dc // 10:>3}-{band.high_dc // 10:<3}c "
+                  f"{band.n:>6} {band.win_rate * 100:>6.1f}% {band.edge_pp:>+6.1f} "
+                  f"{band.net_mean:>+10.3f} {band.net_t:>+7.2f}{mark}")
+        print(f"\n  significantly positive : {len(result.positive)}")
+        print(f"  significantly negative : {len(result.negative)}")
+        print(f"  expected by chance     : {result.expected_by_chance:.1f} "
+              f"in each direction")
+        print(f"\n  all cells pooled: {result.n_trades} trades, "
+              f"{result.net_total:+.2f}, {result.net_mean:+.4f} per trade")
+        return 0
 
     print(f"{len(markets)} markets · entry {args.entry:.0f}s out · {args.size} lots\n")
     print(f"{'band':>10} {'n':>6} {'win%':>7} {'implied%':>9} {'edge':>7} "
@@ -548,6 +572,9 @@ def build_parser() -> argparse.ArgumentParser:
     ba.add_argument("--size", type=int, default=10, help="contracts per trade")
     ba.add_argument("--band-low", type=int, default=90,
                     help="low edge of the band to split, cents")
+    ba.add_argument("--scan", action="store_true",
+                    help="every band at every entry time, with the count of "
+                         "cells chance alone would make significant")
     ba.add_argument("--band-high", type=int, default=98,
                     help="high edge of the band to split, cents")
     ba.set_defaults(func=cmd_bands)

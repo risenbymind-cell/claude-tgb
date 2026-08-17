@@ -1,116 +1,124 @@
 # The favourite-longshot bias on Kalshi's 15-minute crypto markets
 
-**Status: the most promising candidate found, and not yet believable.**
+**Status: tested and refuted.** This document first recorded it as "the most
+promising candidate found, and not yet believable." A wider test says it is not
+a candidate at all. The original numbers are kept below, because how this one
+failed is more useful than the fact that it did.
 
-Measured on **2,250 settled markets across 9 coins**, spanning a week. This is
-the first candidate in the project that survives a chronological split. It is
-still not statistically established, and the reason is worth understanding
-before anyone trades it.
+Reproduce with:
+
+```bash
+python -m kbot.research --dir data/history_big bands --scan
+```
 
 ---
 
-## The bias is real
+## The claim
 
-Buying at the ask 10 minutes before close and holding to settlement, grouped by
-what the market charged:
+Not a forecast. The favourite-longshot bias, documented in betting markets since
+Griffith 1949, says cheap contracts win less often than their price implies and
+expensive ones more often. If Kalshi's 15-minute markets carried it, you could
+buy the favourite at the ask, hold to settlement, and profit without any view on
+the coin at all.
+
+Holding matters: settlement is free, so a held position pays one fee, not two.
+
+## What it looked like
+
+Buying at the ask ten minutes before close, on 3,000 settled markets across five
+coins:
 
 | ask band | n | actual win% | implied% | edge | per trade | t |
 |---|---|---|---|---|---|---|
-| 90–98¢ | 99 | **96.0%** | 92.3% | **+3.7** | **+$0.314** | +1.58 |
-| 80–90¢ | 358 | 85.5% | 83.8% | +1.7 | +$0.070 | +0.38 |
-| 70–80¢ | 522 | 72.8% | 74.3% | −1.5 | −$0.285 | −1.46 |
-| 60–70¢ | 679 | 64.8% | 64.4% | +0.4 | −$0.122 | −0.66 |
-| 50–60¢ | 702 | 53.3% | 54.4% | −1.1 | −$0.292 | −1.55 |
-| 30–50¢ | 1335 | 38.4% | 39.9% | −1.5 | −$0.326 | −2.47 |
-| 15–30¢ | 659 | 20.5% | 22.5% | −2.0 | −$0.331 | −2.12 |
-| 5–15¢ | 141 | **5.7%** | 10.8% | **−5.1** | −$0.585 | −2.99 |
+| 90–98¢ | 179 | **97.2%** | 92.3% | **+4.9** | **+$0.432** | **+3.54** |
+| 80–90¢ | 549 | 85.4% | 84.0% | +1.5 | +$0.049 | +0.33 |
+| 70–80¢ | 733 | 74.6% | 74.2% | +0.4 | −$0.099 | −0.62 |
+| 60–70¢ | 866 | 65.7% | 64.4% | +1.3 | −$0.039 | −0.24 |
+| 50–60¢ | 804 | 55.5% | 54.3% | +1.2 | −$0.061 | −0.35 |
+| 30–50¢ | 1659 | 36.4% | 39.3% | −2.9 | −$0.457 | −3.88 |
+| 15–30¢ | 934 | 19.0% | 22.4% | −3.5 | −$0.474 | −3.71 |
+| 5–15¢ | 256 | 4.7% | 10.7% | **−6.0** | −$0.585 | −5.12 |
 
-The gradient is monotonic at the extremes and in the direction the literature
-predicts: **longshots are overpriced, favourites are underpriced.** A 5–15¢
-contract wins barely half as often as its price implies. This is not a subtle
-statistical artefact — the longshot end is significant at t = −2.99.
+A monotonic gradient in exactly the direction the literature predicts. The
+favourite band cleared t = +3.54, and a percentile bootstrap — not a normal
+interval, which lies about a distribution this skewed — put the mean at
+[+0.165, +0.650], excluding zero. It survived a chronological split: +$0.335 in
+the first half, +$0.574 in the second.
 
-That the bias exists is well established. That it is *tradeable here* is not.
+Every check it was given, it passed.
+
+## What killed it
+
+The entry time was never tested. Ten minutes before close was picked first and
+never revisited. Buying the same 90–98¢ band at other times:
+
+| entry | n | win% | implied% | edge | per trade | t |
+|---|---|---|---|---|---|---|
+| T−780s | 18 | 100.0% | 91.7% | +8.3 | +$0.767 | +19.65 |
+| T−600s | 179 | 97.2% | 92.3% | +4.9 | +$0.432 | +3.54 |
+| T−450s | 472 | 94.5% | 93.0% | +1.5 | +$0.096 | +0.91 |
+| T−300s | 1026 | 92.5% | 93.9% | −1.4 | −$0.185 | **−2.26** |
+| T−180s | 1060 | 93.3% | 94.6% | −1.3 | −$0.169 | **−2.21** |
+| T−120s | 827 | 93.0% | 94.8% | −1.9 | −$0.224 | **−2.53** |
+
+The edge decays as the sample grows and then **reverses**, significantly, three
+times. The cheap end does the same thing in mirror: −6.0pp at T−600 becomes
++2.0pp at T−120.
+
+The samples are not nested — only 50% of the T−600 band members are still in the
+band at T−300, and 19% of T−300's are in T−120's — so the negative results are
+largely independent measurements, not the same markets re-scored.
+
+A claim like "a 92¢ contract is underpriced" says nothing about the clock. One
+that only holds at one time of day, on the smallest sample, is not a claim about
+prices.
+
+### The count that settles it
+
+Scoring all eight bands at all six entry times gives **46 cells with n ≥ 100**:
+
+```
+significantly positive : 1
+significantly negative : 19
+expected by chance     : 1.2 in each direction
+
+all cells pooled: 29,825 trades, -$6,690.43, -$0.2243 per trade
+```
+
+**One significant positive is exactly what 46 tests at 95% confidence produce
+from noise.** It was the cell that got looked at first. The nineteen significant
+negatives are sixteen times the chance expectation, and they all point the same
+way: buying at the ask and holding loses about 22¢ per trade, which is roughly
+the spread plus the fee.
+
+That is not a bias in the price. That is the cost of crossing it.
 
 ---
 
-## Why it is not a strategy yet
+## What to take from this
 
-The only band with a positive expectation is 90–98¢:
+**The methodological point, which is the valuable part.** Every safeguard applied
+to the original result was a real safeguard, correctly applied, and none of them
+could have caught this:
 
-```
-n            99
-win rate     96.0%
-per trade    +$0.314
-t            +1.58
-95% CI       [-$0.077, +$0.706]     <- spans zero
-```
+* a bootstrap interval instead of a normal one — right, and irrelevant
+* a chronological split — passed, and irrelevant
+* seven of nine coins positive — true, and irrelevant
+* a monotonic gradient across eight bands — real, and irrelevant
 
-**Chronological split** — and this is the part no previous candidate survived:
+All four validate a result *within* a cell. None of them counts the cells. The
+grid had been searched before the first number was computed, by the act of
+choosing an entry time, and nothing done afterwards could undo that.
 
-| | n | per trade | t |
-|---|---|---|---|
-| first half | 49 | **+$0.323** | +1.14 |
-| second half | 50 | **+$0.306** | +1.08 |
+`kbot/research/bands.py` now reports the cell count and the chance expectation
+alongside any result, so the next candidate cannot be read without them.
 
-Almost identical. Seven of nine coins have a positive mean. Everything about
-the *shape* of this result is what a real effect looks like.
+**The empirical point.** This is the fourth false positive in this project, after
+a 100%-win-rate plan that lost $83 out of sample, a +$1.22/trade signal that
+lived entirely in one half of the data, and 1,454 "arbitrages" that were a
+misreading of bucket-market strike types. All four were found by widening the
+test rather than by deepening it.
 
-### The reason to distrust it anyway
-
-```
-wins 95, losses 4
-one loss costs  ~$9.53
-total profit     $31.13
-4 more losses would erase the entire edge
-```
-
-The whole result rests on **four observations**. A 96% win rate with a 30:1
-loss-to-win ratio is the classic shape of picking up pennies in front of a
-steamroller: the payoff is dominated by a tail that 99 samples barely touches.
-The confidence interval spanning zero is not a technicality here — it is the
-correct reading of a sample that has seen four of the events that matter.
-
-**n = 99 is not enough for a strategy whose P&L is decided by rare losses.**
-
----
-
-## What would make it believable
-
-1. **Roughly 1,000 trades in the band**, i.e. ~40 losses rather than 4. At the
-   observed rate that is several thousand more settled markets — reachable
-   from Kalshi's history, or a few weeks of recorder uptime.
-2. **A held-out period.** The split above is in-sample in the sense that the
-   band boundaries were chosen after looking at the data. Fix 90–98¢ now and
-   test it on markets harvested later.
-3. **Depth checking.** These results assume a fill at the quoted ask. At 90–98¢
-   the resting size is thin, and a strategy that cannot get filled at size is
-   not a strategy. None of the analysis so far models queue position.
-4. **Fee sensitivity.** The measured edge is ~3.7pp gross against a ~0.6pp fee
-   at these prices. That margin is real but narrow, and it is the reason only
-   the extreme band clears.
-
----
-
-## Honest position
-
-This is **not** a profitable strategy. It is the first candidate that has not
-failed, which is a different and much weaker claim.
-
-Two prior candidates in this project looked far better and were wrong: a
-100%-win-rate plan that lost $83 out of sample, and a +$1.22/trade signal at
-t = +3.08 whose entire result lived in one half of the data. This one is
-weaker on paper than both and more structurally motivated than either — it
-matches a documented market phenomenon, shows a monotonic gradient across eight
-independent bands, and is stable across time.
-
-That combination is worth pursuing. It is not worth funding.
-
-## Reproducing
-
-The pooled dataset is built by `kbot/research/history.py`; the band analysis is
-in this document's git history. To gather more:
-
-```bash
-python -m kbot.research history --per-series 600
-```
+The conclusion in `STATUS.md` is unchanged, and now has one more failed avenue
+behind it: **no edge has been found in these markets, and the price bias is not
+one either.**
