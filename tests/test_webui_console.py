@@ -273,15 +273,21 @@ async def test_connect_never_writes_the_pem_to_the_audit_log(desk, rsa_pem):
         assert rsa_pem not in json.dumps(entry)
 
 
-async def test_connect_persists_encrypted_not_plaintext(desk, rsa_pem, tmp_path):
-    desk.connect_keys("abcd1234efgh5678", rsa_pem)
-    path = desk.settings.db_path.parent / "desk_key.enc"
-    raw = path.read_bytes()
-    assert rsa_pem.encode() not in raw
-    from cryptography.fernet import Fernet as F
+async def test_a_connected_key_is_never_written_to_disk(desk, rsa_pem):
+    """It used to be, encrypted, and nothing ever read it back.
 
-    decrypted = json.loads(F(desk.settings.master_key.encode()).decrypt(raw))
-    assert decrypted["pem"] == rsa_pem.strip()
+    A credential written but never loaded survives no restart, leaves a file
+    holding a private key at whatever umask the process had, and is
+    undecryptable anyway whenever MASTER_KEY is the ephemeral one. Pure
+    liability. The key lives in memory for this process only.
+    """
+    desk.connect_keys("abcd1234efgh5678", rsa_pem)
+    directory = desk.settings.db_path.parent
+    if directory.exists():
+        for path in directory.rglob("*"):
+            if path.is_file():
+                assert rsa_pem.encode() not in path.read_bytes(), path
+    assert not (directory / "desk_key.enc").exists()
 
 
 async def test_connect_endpoint_rejects_bad_key_with_400(desk):
@@ -341,7 +347,7 @@ async def test_research_reports_no_data_rather_than_failing(desk, tmp_path, monk
     not an error worth breaking a tab over."""
     monkeypatch.setenv("RECORDINGS_DIR", str(tmp_path / "does-not-exist"))
     desk._research_cache = None
-    payload = desk.research()
+    payload = await desk.research()
     assert payload["available"] is True
     assert payload["settled"] == 0
     assert payload["enough"] is False
@@ -362,9 +368,9 @@ async def test_research_is_cached(desk, monkeypatch):
 
     monkeypatch.setattr(inv_mod, "take_inventory", counting)
     desk._research_cache = None
-    desk.research()
-    desk.research()
-    desk.research()
+    await desk.research()
+    await desk.research()
+    await desk.research()
     assert len(calls) == 1, "the inventory must not be re-read on every poll"
 
 

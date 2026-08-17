@@ -240,7 +240,7 @@ async def _check_order_path(desk) -> tuple[bool, str]:
 async def _check_recordings(desk) -> tuple[bool, str]:
     """Advisory: the desk runs fine without recordings, but nothing can be
     concluded without them."""
-    payload = desk.research()
+    payload = await desk.research()
     if not payload.get("available"):
         return False, payload.get("error", "no recordings directory")
     settled = payload.get("settled", 0)

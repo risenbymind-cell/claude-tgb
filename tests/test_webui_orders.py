@@ -107,7 +107,7 @@ class RecordingBroker:
             price_dc=price_dc, fee_dc=7,
         )
 
-    async def sell(self, ticker, side, count, price_dc, book):
+    async def sell(self, ticker, side, count, price_dc, book, **kw):
         self.sells.append((ticker, side, count, price_dc))
         if not self._sell_ok:
             return OrderResult(ok=False, error=self._error)
@@ -445,7 +445,7 @@ async def test_the_exchange_exit_price_wins(tmp_path, monkeypatch):
     desk = make_desk(tmp_path, TradingMode.DEMO_LIVE)
 
     class SlippedExit(RecordingBroker):
-        async def sell(self, ticker, side, count, price_dc, book):
+        async def sell(self, ticker, side, count, price_dc, book, **kw):
             self.sells.append((ticker, side, count, price_dc))
             return OrderResult(
                 ok=True, order_id="x1", filled=count, price_dc=580, fee_dc=4
@@ -575,3 +575,127 @@ async def test_reconcile_surfaces_an_api_failure(tmp_path, monkeypatch, rsa_pem)
 
     assert result["ok"] is False
     assert "network down" in result["error"]
+
+
+# ---------------- exits must terminate ----------------
+#
+# Both of these were live in the desk and neither had a test. They are the
+# most expensive class of bug in the project: they only misbehave against a
+# real exchange, and they misbehave by sending orders.
+
+
+class RestingBroker(RecordingBroker):
+    """An exchange that accepts the order but does not fill it immediately.
+
+    Exactly what a good-till-canceled sell does when it rests on the book,
+    and what `_submit` reports as ok=False because it reads `ok` from the
+    immediate fill count.
+    """
+
+    async def sell(self, ticker, side, count, price_dc, book, **kw):
+        self.sells.append((ticker, side, count, price_dc, kw.get("time_in_force")))
+        return OrderResult(ok=False, filled=0, error="order did not fill at the limit")
+
+
+async def test_the_desk_exits_immediate_or_cancel(tmp_path, monkeypatch):
+    """A resting exit reads as a rejection, and a rejection is retried every
+    pass -- so a resting exit would stack one live sell per second against a
+    position held once. IOC makes the result final."""
+    desk = make_desk(tmp_path, TradingMode.DEMO_LIVE)
+
+    seen: dict = {}
+
+    class Watching(RecordingBroker):
+        async def sell(self, ticker, side, count, price_dc, book, **kw):
+            seen.update(kw)
+            return await super().sell(ticker, side, count, price_dc, book, **kw)
+
+    use(desk, Watching(), monkeypatch)
+    desk.enabled = True
+    await desk._maybe_open(view(), signal(), time.time())
+
+    await desk._close(desk.positions[0], 600, "target", time.time(), live_book())
+
+    assert seen.get("time_in_force") == "immediate_or_cancel"
+
+
+async def test_a_resting_exit_does_not_stack_orders(tmp_path, monkeypatch):
+    """The failure this class of bug produces, measured: with a broker that
+    never fills immediately, repeated management passes must not each add an
+    order beyond the retry the operator can see."""
+    desk = make_desk(tmp_path, TradingMode.DEMO_LIVE)
+    opener = RecordingBroker()
+    use(desk, opener, monkeypatch)
+    desk.enabled = True
+    await desk._maybe_open(view(), signal(), time.time())
+    pos = desk.positions[0]
+
+    resting = RestingBroker()
+    monkeypatch.setattr(desk, "broker", lambda: resting)
+    await desk._close(pos, 600, "target", time.time(), live_book())
+
+    # It is still open and flagged, which is correct -- the contracts are
+    # still held. What matters is that the request carried IOC, so nothing is
+    # left resting on the exchange to be duplicated by the next attempt.
+    assert pos.outcome == "open"
+    assert pos.exit_error
+    assert resting.sells[0][4] == "immediate_or_cancel"
+
+
+async def test_a_partial_exit_does_not_claim_a_full_close(tmp_path, monkeypatch):
+    """Booking a 6-of-20 fill as a 20-lot round trip reports P/L for
+    contracts still held and loses track of them entirely."""
+    desk = make_desk(tmp_path, TradingMode.DEMO_LIVE)
+
+    class Partial(RecordingBroker):
+        async def sell(self, ticker, side, count, price_dc, book, **kw):
+            self.sells.append((ticker, side, count, price_dc))
+            return OrderResult(
+                ok=True, order_id="x1", filled=6, price_dc=price_dc, fee_dc=3
+            )
+
+    broker = Partial()
+    use(desk, broker, monkeypatch)
+    desk.enabled = True
+    await desk._maybe_open(view(), signal(), time.time())
+    pos = desk.positions[0]
+    assert pos.count == 10
+
+    await desk._close(pos, 600, "target", time.time(), live_book())
+
+    # The original keeps the 4 still held, and stays open.
+    assert pos.count == 4
+    assert pos.outcome == "open"
+    assert "partial" in pos.exit_error
+
+    # The 6 that filled are booked separately, and only once.
+    closed = [p for p in desk.positions if p.outcome.startswith("target")]
+    assert len(closed) == 1
+    assert closed[0].count == 6
+    assert closed[0].exit_dc == 600
+
+    # No contracts invented or lost.
+    assert pos.count + closed[0].count == 10
+
+
+async def test_a_partial_exit_splits_the_entry_fee(tmp_path, monkeypatch):
+    """Charging the whole entry fee to the closed slice would overstate its
+    loss and understate what the remainder still owes."""
+    desk = make_desk(tmp_path, TradingMode.DEMO_LIVE)
+
+    class Partial(RecordingBroker):
+        async def sell(self, ticker, side, count, price_dc, book, **kw):
+            return OrderResult(
+                ok=True, order_id="x1", filled=5, price_dc=price_dc, fee_dc=3
+            )
+
+    use(desk, Partial(), monkeypatch)
+    desk.enabled = True
+    await desk._maybe_open(view(), signal(), time.time())
+    pos = desk.positions[0]
+    total_entry_fee = pos.entry_fee_dc
+
+    await desk._close(pos, 600, "target", time.time(), live_book())
+
+    closed = [p for p in desk.positions if p.outcome.startswith("target")][0]
+    assert closed.entry_fee_dc + pos.entry_fee_dc == total_entry_fee

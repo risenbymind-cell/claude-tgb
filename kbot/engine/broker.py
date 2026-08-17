@@ -86,7 +86,14 @@ class Broker(Protocol):
     ) -> OrderResult: ...
 
     async def sell(
-        self, ticker: str, side: str, count: int, price_dc: int, book: OrderBook | None
+        self,
+        ticker: str,
+        side: str,
+        count: int,
+        price_dc: int,
+        book: OrderBook | None,
+        *,
+        time_in_force: str = "good_till_canceled",
     ) -> OrderResult: ...
 
 
@@ -142,7 +149,14 @@ class PaperBroker:
         )
 
     async def sell(
-        self, ticker: str, side: str, count: int, price_dc: int, book: OrderBook | None
+        self,
+        ticker: str,
+        side: str,
+        count: int,
+        price_dc: int,
+        book: OrderBook | None,
+        *,
+        time_in_force: str = "good_till_canceled",
     ) -> OrderResult:
         order_id = f"paper-{uuid.uuid4().hex[:12]}"
         self.orders[order_id] = {
@@ -275,10 +289,30 @@ class LiveBroker:
         )
 
     async def sell(
-        self, ticker: str, side: str, count: int, price_dc: int, book: OrderBook | None
+        self,
+        ticker: str,
+        side: str,
+        count: int,
+        price_dc: int,
+        book: OrderBook | None,
+        *,
+        time_in_force: str = "good_till_canceled",
     ) -> OrderResult:
+        """Sell, resting by default.
+
+        The engine places an exit immediately after an entry so the position
+        is never unmanaged, and that exit is meant to sit on the book until
+        the market reaches it -- `good_till_canceled` is right there.
+
+        A caller that only sells when the price has *already* arrived wants
+        the opposite, and must say so. `_submit` reports `ok` from the
+        immediate fill count, so a resting order comes back `ok=False`; a
+        caller that treats that as a rejection and retries will stack a live
+        order per attempt. Passing `immediate_or_cancel` makes the result
+        final: it filled, or it did not and nothing is resting.
+        """
         return await self._submit(
             ticker=ticker, action="sell", side=side, count=count,
-            price_dc=price_dc, time_in_force="good_till_canceled",
+            price_dc=price_dc, time_in_force=time_in_force,
         )
 

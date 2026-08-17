@@ -518,8 +518,37 @@ def test_a_forwarded_address_is_used_when_trusted(desk, pw_hash):
     server = DeskServer(
         desk, host="0.0.0.0", password_hash=pw_hash, trust_proxy=True
     )
-    head = request("GET", "/", extra="X-Forwarded-For: 9.9.9.9, 10.0.0.1")
-    assert server.client_address(head, "1.2.3.4") == "9.9.9.9"
+    head = request("GET", "/", extra="X-Forwarded-For: 10.0.0.1")
+    assert server.client_address(head, "1.2.3.4") == "10.0.0.1"
+
+
+def test_the_rightmost_forwarded_hop_wins(desk, pw_hash):
+    """Proxies append, so the last entry is the one our trusted proxy
+    observed and the only one it wrote. Everything to its left came from the
+    client and is freely forgeable.
+
+    Taking the leftmost would let an attacker put a different address on
+    every request, giving each password guess its own lockout bucket -- the
+    lockout would never trip, and the attempts map would grow without bound.
+    """
+    server = DeskServer(
+        desk, host="0.0.0.0", password_hash=pw_hash, trust_proxy=True
+    )
+    forged = "X-Forwarded-For: 1.1.1.1, 2.2.2.2, 10.0.0.1"
+    assert server.client_address(request("GET", "/", extra=forged), "") == "10.0.0.1"
+
+
+def test_a_forged_chain_cannot_dodge_the_lockout(desk, pw_hash):
+    """The attack the previous test describes, run end to end."""
+    server = DeskServer(
+        desk, host="0.0.0.0", password_hash=pw_hash, trust_proxy=True
+    )
+    for i in range(LOCKOUT_AFTER):
+        head = request("GET", "/", extra=f"X-Forwarded-For: 9.9.9.{i}, 10.0.0.1")
+        server.auth.login("wrong", address=server.client_address(head, ""))
+
+    head = request("GET", "/", extra="X-Forwarded-For: 9.9.9.250, 10.0.0.1")
+    assert server.auth.lockout_remaining(server.client_address(head, "")) > 0
 
 
 def test_forwarded_proto_marks_the_cookie_secure(desk, pw_hash):

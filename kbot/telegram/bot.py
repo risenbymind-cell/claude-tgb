@@ -570,16 +570,24 @@ class Bot:
                 "RECORDINGS_DIR", self.settings.db_path.parent / "recordings"
             )
         )
-        try:
-            from ..research.inventory import take_inventory
+        # Cached and shared. Reading it parses every recording on disk, so an
+        # uncached command lets any subscriber pull the whole corpus into
+        # memory as fast as they can send messages.
+        cached = getattr(self, "_inventory_cache", None)
+        if cached and time.time() - cached[0] < 60:
+            inv = cached[1]
+        else:
+            try:
+                from ..research.inventory import take_inventory
 
-            inv = await asyncio.to_thread(take_inventory, directory)
-        except Exception as exc:  # noqa: BLE001 - a status command must answer
-            await self.tg.send_message(
-                user.tg_id, f"Could not read {html.escape(str(directory))}: "
-                f"{html.escape(str(exc)[:200])}"
-            )
-            return
+                inv = await asyncio.to_thread(take_inventory, directory)
+            except Exception as exc:  # noqa: BLE001 - a status command must answer
+                await self.tg.send_message(
+                    user.tg_id, f"Could not read {html.escape(str(directory))}: "
+                    f"{html.escape(str(exc)[:200])}"
+                )
+                return
+            self._inventory_cache = (time.time(), inv)
 
         from ..research.signals import MIN_WINDOWS
 

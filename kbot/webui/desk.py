@@ -22,7 +22,7 @@ import os
 import secrets
 import time
 from collections import deque
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import httpx
 
@@ -663,7 +663,14 @@ class Desk:
 
         with self.latency.measure("order"):
             result = await self.broker().sell(
-                pos.ticker, pos.side, pos.count, price_dc, book
+                pos.ticker, pos.side, pos.count, price_dc, book,
+                # Immediate-or-cancel, because this is only ever called once
+                # the bid has already reached the price. A resting order would
+                # report ok=False from a zero immediate fill, this method would
+                # read that as a rejection and leave the position open, and the
+                # next pass a second later would submit another -- stacking one
+                # live sell per second against a position we hold once.
+                time_in_force="immediate_or_cancel",
             )
         if not result.ok:
             pos.exit_error = result.error
@@ -673,12 +680,45 @@ class Desk:
             })
             return
 
+        filled = result.filled or pos.count
+        exit_dc = result.price_dc if result.price_dc is not None else price_dc
+        fee = result.fee_dc or (fee_dc(filled, exit_dc) if exit_dc > 0 else 0)
+
+        if filled < pos.count:
+            # A partial fill closes part of the position and leaves the rest on
+            # the exchange. Booking it as a full round trip would report a P/L
+            # for contracts still held and lose track of them entirely, so the
+            # closed slice is split off and the original keeps the remainder.
+            remaining = pos.count - filled
+            closed = replace(
+                pos,
+                count=filled,
+                entry_fee_dc=round(pos.entry_fee_dc * filled / pos.count),
+                exit_dc=exit_dc,
+                exit_fee_dc=fee,
+                exit_order_id=result.order_id,
+                exit_error=None,
+                outcome=f"{outcome} (partial)",
+                closed_at=now,
+            )
+            pos.entry_fee_dc -= closed.entry_fee_dc
+            pos.count = remaining
+            pos.exit_error = (
+                f"partial fill: {filled} of {filled + remaining} closed, "
+                f"{remaining} still open"
+            )
+            self.positions.append(closed)
+            self.log_audit("engine", "exit_partial", {
+                "coin": pos.coin, "ticker": pos.ticker, "filled": filled,
+                "remaining": remaining, "price_dc": exit_dc,
+                "order_id": result.order_id,
+            })
+            return
+
         pos.exit_error = None
         pos.exit_order_id = result.order_id
-        pos.exit_dc = result.price_dc if result.price_dc is not None else price_dc
-        pos.exit_fee_dc = result.fee_dc or (
-            fee_dc(pos.count, pos.exit_dc) if pos.exit_dc > 0 else 0
-        )
+        pos.exit_dc = exit_dc
+        pos.exit_fee_dc = fee
         pos.outcome = outcome
         pos.closed_at = now
         self.log_audit("engine", "exit_filled", {
@@ -757,23 +797,34 @@ class Desk:
             self.log_audit("operator", "connect_rejected", {"error": str(exc)[:200]})
             return {"ok": False, "error": f"private key unusable: {exc}"}
 
-        from cryptography.fernet import Fernet
-
-        fernet = Fernet(self.settings.master_key.encode())
-        encrypted = fernet.encrypt(
-            json.dumps({"key_id": key_id, "pem": pem}).encode()
-        )
-        path = self.settings.db_path.parent / "desk_key.enc"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(encrypted)
-
+        # Deliberately not persisted. An earlier version wrote an encrypted
+        # copy to disk, but nothing ever read it back -- so it survived no
+        # restart, added a file holding a private key at whatever umask the
+        # process happened to have, and was undecryptable anyway whenever
+        # MASTER_KEY was the ephemeral one. A credential that is written but
+        # never loaded is pure liability. The key lives in memory for this
+        # process only; set it in the environment to have it survive a
+        # restart.
         self._signer = signer
         self.rest = KalshiClient(self.settings.rest_base, signer=signer, client=self._http)
         self.discovery = MarketDiscovery(self.rest, self.settings.series)
+
+        # Stop the old feed before replacing it. Dropping the reference alone
+        # leaves its task polling forever -- it would outlive this call, keep
+        # using the previous key, and survive Desk.stop(), which only ever sees
+        # the new one.
+        old_feed = self.feed
         self.feed = MarketFeed(
             self.settings.ws_url, self.rest, signer,
             poll_interval=self.settings.orderbook_poll_interval_s,
         )
+        if old_feed is not None:
+            try:
+                await_stop = old_feed.stop()
+                if asyncio.iscoroutine(await_stop):
+                    asyncio.ensure_future(await_stop)
+            except Exception as exc:  # noqa: BLE001 - a stuck old feed must not
+                log.warning("Could not stop the previous feed: %s", exc)
         if self._task is not None:
             self.feed.start()
 
@@ -793,7 +844,7 @@ class Desk:
 
     # ---------------- research ----------------
 
-    def research(self) -> dict:
+    async def research(self) -> dict:
         """What the recordings can currently support.
 
         Cached for a minute: it reads every recording on disk, which is far
@@ -812,7 +863,10 @@ class Desk:
         try:
             from ..research.inventory import take_inventory
 
-            inv = take_inventory(directory)
+            # Parses every recording on disk. Run inline it would stall the
+            # trading loop -- no book refresh, no position management -- for as
+            # long as the read takes, which grows with every day recorded.
+            inv = await asyncio.to_thread(take_inventory, directory)
         except Exception as exc:  # noqa: BLE001 - a tab must not break the desk
             log.warning("Inventory failed: %s", exc)
             return {"available": False, "error": str(exc)[:200],
@@ -932,7 +986,15 @@ class Desk:
                 divergences.append(
                     f"{ticker}: desk holds {count}, exchange holds none"
                 )
-            elif abs(abs(actual) - count) >= 0.01:
+            elif actual < 0:
+                # Kalshi signs a position by side. Comparing absolute values
+                # would reconcile a short against a long as a match, which is
+                # the one divergence most worth catching.
+                divergences.append(
+                    f"{ticker}: desk holds {count} long, exchange is "
+                    f"{actual:g} (opposite side)"
+                )
+            elif abs(actual - count) >= 0.01:
                 divergences.append(
                     f"{ticker}: desk holds {count}, exchange holds {actual:g}"
                 )

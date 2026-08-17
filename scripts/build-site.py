@@ -32,7 +32,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 SRC, OUT = ROOT / "site", ROOT / "docs"
 
-#: CNAME is what binds the custom domain to this site, and GitHub Pages reads
+#: Pages copied verbatim from site/. CNAME and sitemap.xml are generated
+#: rather than copied, and only when a domain is configured -- see
+#: DOMAIN_FILE below.
 PUBLIC = ("index.html", "app.html", "404.html", "robots.txt")
 
 #: Pages that get canonical/social metadata injected, and the path each one

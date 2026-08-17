@@ -79,7 +79,16 @@ async def run(args: argparse.Namespace) -> int:
 
     # PORT is what every PaaS injects; honouring it is the difference between
     # "deploys" and "deploys after you read the docs".
-    port = args.port if args.port is not None else int(os.getenv("PORT", "8787"))
+    # PORT is injected by every PaaS, and an empty or malformed value should
+    # not be an uncaught ValueError at boot.
+    port = args.port
+    if port is None:
+        raw = (os.getenv("PORT") or "").strip()
+        try:
+            port = int(raw) if raw else 8787
+        except ValueError:
+            print(f"config error: PORT must be a number, got {raw!r}", file=sys.stderr)
+            return 2
     host = "0.0.0.0" if (args.phone or args.host is None and password_hash) else args.host
     host = host or "127.0.0.1"
 

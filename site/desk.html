@@ -721,7 +721,7 @@ const ago = (ts) => {
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
   ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
-let state = null, dirty = false, focus = null;
+let state = null, dirty = false, focus = null, authEnabled = false;
 
 // Handed to us by /api/state when the desk is password-protected, and sent
 // back on every state-changing request. SameSite=Strict already blocks a
@@ -773,7 +773,11 @@ showTab(localStorage.getItem("desk-tab") || "desk");
 function render(s) {
   state = s;
   if (s.csrf) csrf = s.csrf;
-  $("c-signout").hidden = !(s.auth && s.auth.enabled);
+  // `auth` only rides along on the /api/state GET, so a POST response would
+  // otherwise hide the sign-out button until the next poll. Once known, it
+  // stays known -- authentication cannot turn itself off mid-session.
+  if (s.auth && s.auth.enabled) authEnabled = true;
+  $("c-signout").hidden = !authEnabled;
   $("c-sandbox").hidden = !s.sandbox;
   $("c-conn").textContent = "connected";
   $("c-conn").className = "chip live";

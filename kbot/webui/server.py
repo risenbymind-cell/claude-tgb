@@ -239,7 +239,17 @@ class DeskServer:
         if self.trust_proxy:
             forwarded = _header(head, "x-forwarded-for")
             if forwarded:
-                return forwarded.split(",")[0].strip()
+                # The RIGHTMOST entry, not the leftmost. Proxies append, so the
+                # last hop is the one our trusted proxy observed and the only
+                # one it wrote; everything to its left was supplied by the
+                # client and is freely forgeable. Taking the leftmost would let
+                # an attacker put a different address on every request, giving
+                # each password guess its own lockout bucket -- so the lockout
+                # would never trip, and the attempts map would grow without
+                # bound.
+                hops = [h.strip() for h in forwarded.split(",") if h.strip()]
+                if hops:
+                    return hops[-1]
         return peer
 
     def _is_secure(self, head: str) -> bool:
@@ -510,7 +520,7 @@ class DeskServer:
         if method == "GET" and path == "/api/research":
             # Its own route rather than part of /api/state: it reads every
             # recording on disk, and the state payload is polled once a second.
-            return _json(self.desk.research())
+            return _json(await self.desk.research())
 
         if method == "GET" and path == "/healthz":
             return _json({"ok": True, "markets": len(self.desk.markets)})
