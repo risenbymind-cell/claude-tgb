@@ -64,6 +64,12 @@ class IntentRecorder:
     async def resolve(self, client_order_id: str, **kwargs) -> None:
         await self.storage.resolve_intent(client_order_id, **kwargs)
 
+    async def in_flight(self, ticker: str, action: str, side: str):
+        """An unresolved intent for this exact trade, if one is recent."""
+        return await self.storage.has_pending_intent(
+            self.tg_id, ticker, action, side
+        )
+
 
 @dataclass
 class OrderResult:
@@ -209,6 +215,29 @@ class LiveBroker:
         stays constant across the client's internal retries, which is what
         makes a retry idempotent rather than a second order.
         """
+        if self.intents is not None:
+            # An intent written but never resolved means a submission is
+            # either still running or died mid-flight. Sending a second one
+            # is how a single signal becomes a double position -- and unlike
+            # most double-order bugs, nothing downstream would notice,
+            # because each submission is individually correct.
+            existing = await self.intents.in_flight(ticker, action, side)
+            if existing is not None:
+                log.error(
+                    "Refusing %s %s %s: intent %s is still unresolved from "
+                    "%.0fs ago.",
+                    action, side, ticker, existing["client_order_id"],
+                    time.time() - existing["created_at"],
+                )
+                return OrderResult(
+                    ok=False,
+                    error=(
+                        "an order for this market is already in flight "
+                        f"(intent {existing['client_order_id'][:8]}); "
+                        "refusing to send a second"
+                    ),
+                )
+
         client_order_id = str(uuid.uuid4())
         if self.intents is not None:
             await self.intents.record(

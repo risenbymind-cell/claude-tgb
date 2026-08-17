@@ -8,6 +8,7 @@ import signal
 import sys
 
 from .config import ConfigError, load_settings
+from .lock import AlreadyRunning, InstanceLock
 from .telegram.api import TelegramError
 from .redact import install as install_redaction
 from .storage import Storage
@@ -35,6 +36,18 @@ EXIT_CONFIG = 2
 
 
 async def amain(settings) -> int:
+    # Before anything opens a socket or reads a market. Two instances against
+    # one account double every position and neither notices, because each
+    # one's own ledger balances perfectly.
+    lock = InstanceLock.for_data_dir(
+        settings.db_path, places_real_orders=settings.places_real_orders
+    )
+    try:
+        lock.acquire()
+    except AlreadyRunning as exc:
+        print(f"\n{exc}\n", file=sys.stderr)
+        return EXIT_CONFIG
+
     storage = Storage(settings.db_path, settings.master_key)
     bot = Bot(settings, storage)
 
@@ -70,9 +83,11 @@ async def amain(settings) -> int:
                     exc.description,
                 )
                 storage.close()
+                lock.release()
                 return EXIT_CONFIG
             log.error("Bot exited: %s", exc)
             storage.close()
+            lock.release()
             return 1
     else:
         logging.getLogger("kbot").info("Shutting down…")
@@ -83,6 +98,7 @@ async def amain(settings) -> int:
             pass
 
     storage.close()
+    lock.release()
     return 0
 
 

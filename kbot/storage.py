@@ -316,6 +316,35 @@ class Storage:
 
         return await self._run(go)
 
+    async def has_pending_intent(
+        self, tg_id: int, ticker: str, action: str, side: str,
+        *, within_s: float = 120.0
+    ) -> dict[str, Any] | None:
+        """An unresolved intent for the same trade, recent enough to still be
+        in flight.
+
+        `pending` means an order was written down and its outcome was never
+        recorded — the submission is either still running or the process died
+        mid-flight. Submitting a second one in that state is how an account
+        ends up with double the intended position from a single signal.
+
+        Bounded by age deliberately: an intent that has been pending for an
+        hour is not in flight, it is wreckage from a crash, and blocking all
+        future trading on that market until someone reconciles it by hand
+        would turn a recoverable state into an outage.
+        """
+
+        def go() -> dict[str, Any] | None:
+            row = self._conn.execute(
+                "SELECT * FROM order_intents WHERE status='pending' "
+                "AND tg_id=? AND ticker=? AND action=? AND side=? "
+                "AND created_at >= ? ORDER BY created_at DESC LIMIT 1",
+                (tg_id, ticker, action, side, time.time() - within_s),
+            ).fetchone()
+            return dict(row) if row else None
+
+        return await self._run(go)
+
     async def intent_exists(self, client_order_id: str) -> bool:
         def go() -> bool:
             row = self._conn.execute(

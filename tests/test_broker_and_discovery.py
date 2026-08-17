@@ -170,15 +170,21 @@ async def test_discovery_keeps_the_last_market_when_a_request_fails():
 
 
 class _FakeIntents:
-    def __init__(self) -> None:
+    def __init__(self, in_flight_intent=None) -> None:
         self.recorded: list[dict] = []
         self.resolved: list[tuple[str, dict]] = []
+        #: What `in_flight` reports. None means nothing is outstanding, which
+        #: is the normal case for every test that is not about duplicates.
+        self.outstanding = in_flight_intent
 
     async def record(self, **kwargs) -> None:
         self.recorded.append(kwargs)
 
     async def resolve(self, client_order_id: str, **kwargs) -> None:
         self.resolved.append((client_order_id, kwargs))
+
+    async def in_flight(self, ticker: str, action: str, side: str):
+        return self.outstanding
 
 
 class _FakeClient:

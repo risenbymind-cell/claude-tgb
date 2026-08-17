@@ -26,6 +26,7 @@ import signal
 import sys
 
 from ..config import ConfigError, load_settings
+from ..lock import AlreadyRunning, InstanceLock
 from ..redact import install as install_redaction
 from .auth import AuthError, hash_password, password_hash_from_env
 from .desk import Desk, SandboxLocked
@@ -67,20 +68,35 @@ async def run(args: argparse.Namespace) -> int:
     if sandbox:
         log.info("Sandbox: no credentials, no order path, simulated fills only.")
 
+    # A sandbox places no orders and holds no credentials, so two of them
+    # racing costs nothing -- and refusing to open a demo because a live desk
+    # is up would be friction with no safety value.
+    lock = None
+    if not sandbox:
+        lock = InstanceLock.for_data_dir(
+            settings.db_path, places_real_orders=settings.places_real_orders
+        )
+        try:
+            lock.acquire()
+        except AlreadyRunning as exc:
+            print(f"\n{exc}\n", file=sys.stderr)
+            return 2
+
     try:
         desk = Desk(
             settings, size=args.size, target_c=args.target, sandbox=sandbox
         )
     except SandboxLocked as exc:
         print(f"config error: {exc}", file=sys.stderr)
+        if lock:
+            lock.release()
         return 2
     desk.strategy = args.strategy
     desk.start()
 
-    # PORT is what every PaaS injects; honouring it is the difference between
-    # "deploys" and "deploys after you read the docs".
-    # PORT is injected by every PaaS, and an empty or malformed value should
-    # not be an uncaught ValueError at boot.
+    # PORT is what every PaaS injects, so honouring it is the difference
+    # between "deploys" and "deploys after you read the docs". An empty or
+    # malformed value should not be an uncaught ValueError at boot.
     port = args.port
     if port is None:
         raw = (os.getenv("PORT") or "").strip()
@@ -105,6 +121,8 @@ async def run(args: argparse.Namespace) -> int:
     except RuntimeError as exc:
         print(f"\n{exc}\n", file=sys.stderr)
         await desk.stop()
+        if lock:
+            lock.release()
         return 2
 
     print()
@@ -149,6 +167,8 @@ async def run(args: argparse.Namespace) -> int:
         log.info("Shutting down; closing the feed and flushing state.")
         await server.stop()
         await desk.stop()
+        if lock:
+            lock.release()
         log.info("Desk stopped cleanly.")
     return 0
 
