@@ -193,6 +193,74 @@ def cmd_inventory(args: argparse.Namespace) -> int:
     return 0 if inv.enough_for_a_verdict else 1
 
 
+def cmd_bands(args: argparse.Namespace) -> int:
+    """Does the price itself carry a bias?
+
+    Every other command here scores a *forecast*. This one scores no forecast at
+    all: it buys at the ask, holds to settlement, and groups the results by what
+    the market charged. See `kbot/research/bands.py` for why that is a different
+    question from the rest of the project, and a more promising one.
+    """
+    from ..config import DEFAULT_SERIES
+    from .bands import (
+        analyse, bootstrap_ci, split_chronologically, summarise, trades_from,
+    )
+    from .history import load_cached
+
+    directory = Path(args.dir)
+    markets = []
+    for series in DEFAULT_SERIES.values():
+        markets.extend(load_cached(directory, series))
+    if not markets:
+        print(f"No harvested history in {directory}.")
+        print("Run: python -m kbot.research history --per-series 600")
+        return 1
+
+    print(f"{len(markets)} markets · entry {args.entry:.0f}s out · {args.size} lots\n")
+    print(f"{'band':>10} {'n':>6} {'win%':>7} {'implied%':>9} {'edge':>7} "
+          f"{'per trade':>10} {'t':>7}  {'95% CI':>18}")
+    for band in analyse(markets, entry_at_s=args.entry, size=args.size):
+        print(
+            f"{band.low_dc // 10:>3}-{band.high_dc // 10:<3}c "
+            f"{band.n:>6} {band.win_rate * 100:>6.1f}% {band.implied * 100:>8.1f}% "
+            f"{band.edge_pp:>+6.1f} {band.net_mean:>+10.3f} {band.net_t:>+7.2f}  "
+            f"[{band.ci_low:>+7.3f}, {band.ci_high:>+7.3f}]"
+        )
+
+    # The interesting band gets the harder test: the same rule, scored on the
+    # later half of the sample only.
+    low, high = args.band_low * 10, args.band_high * 10
+    trades = trades_from(markets, entry_at_s=args.entry, size=args.size)
+    early, late = split_chronologically(trades)
+    print(f"\nChronological split of the {args.band_low}-{args.band_high}c band:")
+    for label, part in (("first half", early), ("second half", late)):
+        band = summarise(part, low, high)
+        if band is None:
+            print(f"  {label:<12} no trades")
+            continue
+        print(
+            f"  {label:<12} n={band.n:<5} {band.win_rate * 100:>5.1f}% "
+            f"{band.net_mean:>+8.3f}/trade  t={band.net_t:>+6.2f}  "
+            f"wins {band.wins} losses {band.losses}"
+        )
+    inside = [t for t in trades if low <= t.ask_dc < high]
+    if inside:
+        lo, hi = bootstrap_ci([t.net for t in inside])
+        print(f"\n  bootstrap 95% CI on the mean: [{lo:+.3f}, {hi:+.3f}]"
+              f"{'' if lo > 0 else '   <- spans zero'}")
+    whole = summarise(trades, low, high)
+    if whole is not None and whole.losses:
+        # The number that decides whether this is a strategy or a coin flip
+        # with good manners.
+        cost = -min(t.net for t in trades
+                    if low <= t.ask_dc < high and not t.won)
+        print(f"\n  total {whole.net_total:+.2f} on {whole.losses} losses; "
+              f"one loss costs ~${cost:.2f}, so "
+              f"{int(whole.net_total / cost) + 1 if whole.net_total > 0 else 0} "
+              f"more would erase it.")
+    return 0
+
+
 def cmd_history(args: argparse.Namespace) -> int:
     """Score a plan on Kalshi's own settled history, out of sample.
 
@@ -470,6 +538,19 @@ def build_parser() -> argparse.ArgumentParser:
         "inventory",
         help="what is recorded, and whether it can support a verdict yet",
     ).set_defaults(func=cmd_inventory)
+
+    ba = sub.add_parser(
+        "bands",
+        help="win rate by entry price -- does the price itself carry a bias?",
+    )
+    ba.add_argument("--entry", type=float, default=600.0,
+                    help="seconds before close to buy")
+    ba.add_argument("--size", type=int, default=10, help="contracts per trade")
+    ba.add_argument("--band-low", type=int, default=90,
+                    help="low edge of the band to split, cents")
+    ba.add_argument("--band-high", type=int, default=98,
+                    help="high edge of the band to split, cents")
+    ba.set_defaults(func=cmd_bands)
 
     hi = sub.add_parser(
         "history",

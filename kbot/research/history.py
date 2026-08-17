@@ -263,8 +263,15 @@ async def harvest(
     *,
     refresh: bool = False,
     progress=None,
+    concurrency: int = CONCURRENCY,
 ) -> list[Market]:
-    """Fetch (or load) settled markets with candlesticks, per series."""
+    """Fetch (or load) settled markets with candlesticks, per series.
+
+    `concurrency` is how many candlestick requests are in flight at once. The
+    default is deliberately low; raise it only when the size of the harvest
+    justifies leaning harder on someone else's public API, and note that a 429
+    costs more than it saves once the backoff starts compounding.
+    """
     everything: list[Market] = []
     async with httpx.AsyncClient(timeout=30.0) as client:
         for series in series_list:
@@ -277,7 +284,7 @@ async def harvest(
                     continue
 
             settled = await fetch_settled(client, series, per_series)
-            gate = asyncio.Semaphore(CONCURRENCY)
+            gate = asyncio.Semaphore(max(1, concurrency))
 
             async def one(market: dict, series=series) -> Market | None:
                 async with gate:
