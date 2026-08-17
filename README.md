@@ -5,7 +5,16 @@ SOL, XRP, DOGE, BNB, HYPE), reads the live order book, and either sends you a
 signal or places the trade on your own Kalshi account.
 
 Everything runs from one chat: pick your coins, set your size and risk caps,
-start in a paper simulation, and switch to live when you're satisfied.
+start in a paper simulation, and switch to live when you're satisfied. There is
+also a web desk (`python -m kbot.webui`) that does the same job in a browser.
+
+**Picking this up mid-stream? Start with [STATUS.md](STATUS.md)** — current
+state, what is outstanding, and the findings worth not re-deriving.
+
+Other docs: [RECORDER.md](RECORDER.md) (the thing to run first),
+[DEPLOY.md](DEPLOY.md) (hosting the desk), [SETUP.md](SETUP.md),
+[TUTORIAL.md](TUTORIAL.md), [WINDOWS.md](WINDOWS.md),
+[UPGRADE.md](UPGRADE.md).
 
 ---
 
