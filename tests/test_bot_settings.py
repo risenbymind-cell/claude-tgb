@@ -249,3 +249,83 @@ async def test_health_names_the_mode_and_the_switch(bot):
     text = out[-1][1]
     assert "Mode:" in text and "Kill switch:" in text
     assert "PAPER" in text
+
+
+# ---------------- /data ----------------
+#
+# The recorder has to run for days before any strategy question can be
+# answered, so its status belongs somewhere checkable from a bus stop. The
+# last run stopped after two hours and nobody noticed for a day and a half.
+
+
+def _write_recordings(directory, *, markets=1, result="yes", t0=1_000_000.0):
+    import gzip
+    import json
+
+    directory.mkdir(parents=True, exist_ok=True)
+    with gzip.open(directory / "2020-01-01.jsonl.gz", "wt") as fh:
+        for m in range(markets):
+            ticker = f"KX{m}"
+            for i in range(2):
+                fh.write(json.dumps({
+                    "type": "book", "t": t0 + m * 10 + i, "ticker": ticker,
+                    "coin": "BTC", "o": t0, "c": t0 + 900,
+                    "yes": [[500, 10]], "no": [[490, 10]],
+                }) + "\n")
+            fh.write(json.dumps(
+                {"type": "settle", "ticker": ticker, "result": result}
+            ) + "\n")
+    return directory
+
+
+def test_data_is_a_registered_command():
+    from kbot.telegram.bot import COMMANDS
+
+    assert any(name == "data" for name, _ in COMMANDS)
+
+
+async def test_no_recordings_says_how_to_start(bot, tmp_path, monkeypatch):
+    out = await _sent(bot)
+    monkeypatch.setenv("RECORDINGS_DIR", str(tmp_path / "empty"))
+    u = await user(bot)
+    await bot._cmd_data(u, [], {})
+    text = out[-1][1]
+    assert "Nothing recorded yet" in text
+    assert "no API keys" in text
+
+
+async def test_it_reports_the_recorder_as_stopped(bot, tmp_path, monkeypatch):
+    """The failure that actually happened, and the one worth seeing first."""
+    out = await _sent(bot)
+    monkeypatch.setenv("RECORDINGS_DIR", str(_write_recordings(tmp_path / "rec")))
+    u = await user(bot)
+    await bot._cmd_data(u, [], {})
+    text = out[-1][1]
+    assert "not running" in text
+    assert "settled markets" in text
+
+
+async def test_an_unreadable_directory_still_answers(bot, monkeypatch):
+    """A status command that raises tells you nothing at the moment you most
+    wanted to know."""
+    out = await _sent(bot)
+
+    def boom(_):
+        raise OSError("disk gone")
+
+    monkeypatch.setattr("kbot.research.inventory.take_inventory", boom)
+    u = await user(bot)
+    await bot._cmd_data(u, [], {})
+    assert "Could not read" in out[-1][1]
+
+
+async def test_a_one_sided_sample_is_flagged(bot, tmp_path, monkeypatch):
+    """Volume alone is not evidence: a sample that settled one way is one move
+    counted many times."""
+    out = await _sent(bot)
+    monkeypatch.setenv(
+        "RECORDINGS_DIR", str(_write_recordings(tmp_path / "rec", markets=10, result="no"))
+    )
+    u = await user(bot)
+    await bot._cmd_data(u, [], {})
+    assert "settled the same way" in out[-1][1]

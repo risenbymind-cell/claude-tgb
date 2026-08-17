@@ -34,6 +34,7 @@ COMMANDS = [
     ("positions", "Open positions and recent trades"),
     ("pnl", "Profit and loss summary"),
     ("status", "Bot and market status"),
+    ("data", "Recording progress toward a verdict"),
     ("stats", "Performance breakdown"),
     ("stop", "Stop trading"),
     ("help", "How the bot works"),
@@ -230,6 +231,7 @@ class Bot:
             "kill": self._cmd_kill,
             "resume": self._cmd_resume,
             "health": self._cmd_health,
+            "data": self._cmd_data,
         }
         handler = handlers.get(command)
         if handler is None:
@@ -549,6 +551,88 @@ class Bot:
         ]
         if desynced:
             lines.append(f"⚠️ {desynced} book(s) desynced, awaiting re-snapshot")
+        await self.tg.send_message(user.tg_id, "\n".join(lines))
+
+    async def _cmd_data(self, user: User, args: list[str], message: dict) -> None:
+        """Whether the recorder is running, and how far the data is from
+        supporting a conclusion.
+
+        On a phone deliberately. The recorder has to run for days before any
+        strategy question can be answered, and a thing that needs watching for
+        days is a thing worth being able to check from a bus stop -- the last
+        run stopped after two hours and nobody noticed for a day and a half.
+        """
+        import os
+        from pathlib import Path
+
+        directory = Path(
+            os.getenv(
+                "RECORDINGS_DIR", self.settings.db_path.parent / "recordings"
+            )
+        )
+        try:
+            from ..research.inventory import take_inventory
+
+            inv = await asyncio.to_thread(take_inventory, directory)
+        except Exception as exc:  # noqa: BLE001 - a status command must answer
+            await self.tg.send_message(
+                user.tg_id, f"Could not read {html.escape(str(directory))}: "
+                f"{html.escape(str(exc)[:200])}"
+            )
+            return
+
+        from ..research.signals import MIN_WINDOWS
+
+        if inv.settled == 0:
+            await self.tg.send_message(
+                user.tg_id,
+                "<b>Recordings</b>\n\nNothing recorded yet.\n\n"
+                "Start with <code>python -m kbot.research record</code> — it "
+                "needs no API keys.",
+            )
+            return
+
+        age = None if inv.last_sample is None else time.time() - inv.last_sample
+        running = age is not None and age < 300
+        if age is None:
+            seen = "never"
+        elif age < 120:
+            seen = f"{age:.0f}s ago"
+        elif age < 7200:
+            seen = f"{age / 60:.0f} minutes ago"
+        else:
+            seen = f"{age / 3600:.1f} hours ago"
+
+        filled = int(round(min(1.0, inv.progress) * 20))
+        bar = "█" * filled + "░" * (20 - filled)
+
+        lines = [
+            "<b>Recordings</b>",
+            "",
+            f"{'🟢 recording' if running else '🔴 not running'} · last sample {seen}",
+            "",
+            f"<code>{bar}</code> {100 * inv.progress:.0f}%",
+            f"{inv.settled}/{MIN_WINDOWS} settled markets",
+            f"{inv.yes} yes / {inv.no} no",
+        ]
+
+        if inv.is_one_sided:
+            lines += [
+                "",
+                f"⚠️ {100 * inv.one_sided_share:.0f}% settled the same way — "
+                "one directional move counted many times, not many "
+                "independent observations.",
+            ]
+        if inv.gaps:
+            lines += [
+                "",
+                f"⚠️ {inv.downtime_hours:.1f}h with nothing recorded, across "
+                f"{len(inv.gaps)} gap(s).",
+            ]
+        remaining = inv.days_remaining_observed()
+        if remaining:
+            lines += ["", f"About {remaining:.0f} more day(s) at the rate so far."]
+
         await self.tg.send_message(user.tg_id, "\n".join(lines))
 
     def _is_admin(self, user: User) -> bool:
