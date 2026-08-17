@@ -76,7 +76,7 @@ Create an API key at kalshi.com under Account → API Keys. You'll get a key ID 
 /dashboard · /positions · /pnl · /stats · /status · /health · /stop · /disconnect
 
 <b>Admin</b>
-/kill stops every order immediately, for everyone, and survives a restart. /resume clears it. /genkeys mints access keys.
+/kill stops every order immediately, for everyone, and survives a restart. /resume clears it. /genkeys mints access keys. /selftest runs live checks against this deployment — it reaches Kalshi, signs with the platform key and writes to disk, rather than reading settings back at you.
 
 <b>Results channel</b>
 <code>/share on</code> posts your closed trades to the public results channel — anonymously, no username or account detail, and losses are posted alongside wins. Off by default.
@@ -232,6 +232,7 @@ class Bot:
             "resume": self._cmd_resume,
             "health": self._cmd_health,
             "data": self._cmd_data,
+            "selftest": self._cmd_selftest,
         }
         handler = handlers.get(command)
         if handler is None:
@@ -641,6 +642,37 @@ class Bot:
         if remaining:
             lines += ["", f"About {remaining:.0f} more day(s) at the rate so far."]
 
+        await self.tg.send_message(user.tg_id, "\n".join(lines))
+
+    async def _cmd_selftest(self, user: User, args: list[str], message: dict) -> None:
+        """Run the real checks against this process.
+
+        Admin-only: it makes live requests to Kalshi and reads every recording
+        on disk, so letting any subscriber trigger it repeatedly would be a
+        way to spend the bot's rate limit and memory.
+
+        Shares its implementation with the desk rather than restating it. Two
+        copies would drift, and a deployment would then be verified by
+        whichever copy happened to be maintained.
+        """
+        if not self._is_admin(user):
+            return
+        await self.tg.send_message(user.tg_id, "Running self-tests…")
+
+        from ..selftest import run_selftest
+
+        report = await run_selftest(self.engine)
+        icon = {"pass": "✅", "warn": "⚠️", "fail": "❌"}
+        lines = [
+            f"<b>Self-test</b> — {html.escape(report.summary())}",
+            "",
+        ]
+        for check in report.checks:
+            lines.append(
+                f"{icon[check.status]} <b>{html.escape(check.name)}</b>"
+                f"  <i>{check.duration_ms:.0f}ms</i>\n"
+                f"    {html.escape(check.detail)}"
+            )
         await self.tg.send_message(user.tg_id, "\n".join(lines))
 
     def _is_admin(self, user: User) -> bool:

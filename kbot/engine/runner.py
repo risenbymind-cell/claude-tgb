@@ -74,6 +74,10 @@ class Engine:
             except InvalidPrivateKey as exc:
                 log.error("Platform Kalshi key is unusable (%s); using REST polling.", exc)
 
+        #: Kept so the self-test can verify the platform key still signs.
+        #: A key that is present but unusable fails as an auth error mid
+        #: session, which reads like a bad token.
+        self._signer = signer
         self.public = KalshiClient(settings.rest_base, signer=signer, client=self._http)
         self.feed = MarketFeed(
             settings.ws_url,

@@ -21,7 +21,7 @@ from cryptography.fernet import Fernet
 from kbot.config import Settings
 from kbot.safety import TradingMode
 from kbot.webui.desk import Desk
-from kbot.webui.selftest import (
+from kbot.selftest import (
     CHECK_TIMEOUT_S,
     Check,
     SelfTestReport,
@@ -77,7 +77,7 @@ async def test_a_hanging_check_times_out():
     async def hangs():
         await asyncio.sleep(CHECK_TIMEOUT_S + 10)
 
-    from kbot.webui import selftest
+    from kbot import selftest
 
     original = selftest.CHECK_TIMEOUT_S
     selftest.CHECK_TIMEOUT_S = 0.05
@@ -352,3 +352,106 @@ async def test_against_the_real_exchange(desk):
     by_name = {c.name: c for c in report.checks}
     assert by_name["kalshi reachable"].ok, by_name["kalshi reachable"].detail
     assert by_name["clock sync"].ok, by_name["clock sync"].detail
+
+
+# ---------------- one implementation, two front ends ----------------
+#
+# The desk and the Telegram engine are different objects with overlapping
+# shapes. Two copies of these checks would drift, and a deployment would then
+# be verified by whichever copy happened to be maintained.
+
+
+@pytest.fixture()
+def engine(tmp_path):
+    from cryptography.fernet import Fernet as F
+
+    from kbot.engine.runner import Engine
+    from kbot.storage import Storage
+
+    settings = Settings(
+        telegram_token="x", admin_ids=frozenset({1}),
+        master_key=F.generate_key().decode(),
+        db_path=tmp_path / "data" / "k.sqlite3", demo=False,
+        mode=TradingMode.PAPER, series={"BTC": "KXBTC15M"}, spot_products={},
+    )
+    storage = Storage(settings.db_path, settings.master_key)
+    eng = Engine(settings, storage, lambda *a, **k: asyncio.sleep(0))
+    yield eng
+    storage.close()
+
+
+def test_the_engine_satisfies_the_required_surface(engine):
+    """The contract the module docstring states. A missing attribute here is
+    an AttributeError inside a health check, which is the worst place for
+    one."""
+    for attribute in ("settings", "kill", "discovery", "_http", "_signer"):
+        assert hasattr(engine, attribute), attribute
+
+
+async def test_the_local_checks_run_against_the_engine(engine, monkeypatch):
+    """Not just importable -- actually correct against the other front end."""
+    async def offline(*a, **k):
+        raise OSError("no network in this test")
+
+    monkeypatch.setattr(engine._http, "get", offline)
+    monkeypatch.setattr(engine.discovery, "refresh", lambda *a, **k: offline())
+
+    report = await run_selftest(engine)
+    by_name = {c.name: c for c in report.checks}
+    assert by_name["strategies"].ok is True
+    assert by_name["data directory"].ok is True
+    assert by_name["kill switch"].ok is True
+    assert by_name["order path"].ok is True
+
+
+async def test_the_order_path_check_works_without_a_desk_gate(engine):
+    """The desk has blocked_reason(); the engine does not. The check must
+    fall back rather than raise."""
+    ok, detail = await _check_order_path(engine)
+    assert ok is True
+    assert "paper" in detail
+
+
+async def test_the_engine_order_path_reports_a_kill(engine, tmp_path):
+    """With no desk gate to consult, the fallback still has to notice the one
+    condition that stops every order."""
+    from kbot.safety import TradingMode as TM
+
+    object.__setattr__(engine.settings, "mode", TM.DEMO_LIVE)
+    engine.kill.engage("testing", source="test")
+    ok, detail = await _check_order_path(engine)
+    assert ok is False
+    assert "kill switch" in detail
+
+
+async def test_recordings_are_read_directly_without_a_desk_cache(engine, monkeypatch, tmp_path):
+    """The desk caches an inventory; the engine has none, so the check reads
+    the directory itself -- on a thread, since it parses every recording and
+    may be running inside the bot's event loop."""
+    monkeypatch.setenv("RECORDINGS_DIR", str(tmp_path / "nothing-here"))
+    from kbot.selftest import _check_recordings
+
+    ok, detail = await _check_recordings(engine)
+    assert ok is False
+    assert "recorder" in detail.lower() or "record" in detail.lower()
+
+
+def test_selftest_is_not_owned_by_the_web_ui():
+    """It serves both front ends, so it lives beside them rather than inside
+    one of them."""
+    import kbot.selftest as module
+
+    assert "webui" not in module.__name__
+
+
+def test_the_bot_exposes_it_admin_only():
+    """It makes live requests and reads every recording on disk, so any
+    subscriber triggering it repeatedly is a way to spend the bot's rate
+    limit and memory."""
+    import inspect
+
+    from kbot.telegram.bot import Bot
+
+    src = inspect.getsource(Bot._cmd_selftest)
+    assert "_is_admin" in src
+    assert src.index("_is_admin") < src.index("run_selftest")

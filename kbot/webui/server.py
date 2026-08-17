@@ -629,7 +629,7 @@ class DeskServer:
                 return _json({**result, "state": self.desk.snapshot()})
 
             if path == "/api/selftest":
-                from .selftest import run_selftest
+                from ..selftest import run_selftest
 
                 report = await run_selftest(self.desk)
                 payload = report.to_dict()

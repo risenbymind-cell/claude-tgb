@@ -14,6 +14,21 @@ into a false reassurance.
 
 Ordered cheapest and most local first, so an obvious local fault is not
 reported underneath a network timeout.
+
+**What a target must provide.** These checks run against the web desk and
+against the Telegram engine, which are different objects with overlapping
+shapes. Rather than two copies that drift apart — and a deployment verified by
+whichever copy happened to be maintained — the checks are duck-typed against a
+small required surface:
+
+    settings      the process configuration
+    kill          a KillSwitch
+    discovery     a MarketDiscovery
+    _http         an httpx.AsyncClient
+    _signer       a Signer, or None
+
+and three optional extras that only the desk has, each with a documented
+fallback below: `sandbox`, `blocked_reason()`, `research()`.
 """
 
 from __future__ import annotations
@@ -117,7 +132,7 @@ async def _timed(name: str, coro, *, advisory: bool = False) -> Check:
 
 
 async def _check_strategies() -> tuple[bool, str]:
-    from ..strategy import get_strategy, strategy_names
+    from .strategy import get_strategy, strategy_names
 
     names = strategy_names()
     if not names:
@@ -190,7 +205,7 @@ async def _check_clock(desk) -> tuple[bool, str]:
     """Kalshi signs each request with a timestamp and rejects one too far from
     its own clock. Drift does not fail at boot -- it fails mid-session as an
     authentication error, which reads like a bad key."""
-    from ..safety import measure_clock_drift
+    from .safety import measure_clock_drift
 
     check = await measure_clock_drift(desk.settings.rest_base, client=desk._http)
     return check.ok, check.detail
@@ -224,14 +239,20 @@ async def _check_credentials(desk) -> tuple[bool, str]:
 async def _check_order_path(desk) -> tuple[bool, str]:
     """What would happen if a signal fired right now.
 
-    Never places an order. It reports the same gate the trading path consults,
-    so the answer here and the behaviour there cannot disagree.
+    Never places an order. Where the target has its own gate it reports that,
+    so the answer here and the behaviour there cannot disagree; the Telegram
+    engine has no single equivalent, so the two conditions common to both are
+    checked directly.
     """
-    blocked = desk.blocked_reason()
-    if desk.sandbox:
+    if getattr(desk, "sandbox", False):
         return True, "sandbox: simulated fills only, no order path by design"
     if not desk.settings.mode.places_real_orders:
         return True, "paper: fills simulated, nothing sent to Kalshi"
+
+    gate = getattr(desk, "blocked_reason", None)
+    blocked = gate() if gate else (
+        "kill switch engaged" if desk.kill.engaged else None
+    )
     if blocked:
         return False, f"orders blocked: {blocked}"
     return True, f"{desk.settings.mode.value}: orders would reach Kalshi"
@@ -240,7 +261,32 @@ async def _check_order_path(desk) -> tuple[bool, str]:
 async def _check_recordings(desk) -> tuple[bool, str]:
     """Advisory: the desk runs fine without recordings, but nothing can be
     concluded without them."""
-    payload = await desk.research()
+    research = getattr(desk, "research", None)
+    if research is None:
+        # No cached view on this target, so read the directory directly. On a
+        # thread: it parses every recording on disk and this may be running
+        # inside a bot's event loop.
+        from pathlib import Path
+
+        from .research.inventory import take_inventory
+
+        directory = Path(
+            os.getenv("RECORDINGS_DIR", desk.settings.db_path.parent / "recordings")
+        )
+        inv = await asyncio.to_thread(take_inventory, directory)
+        payload = {
+            "available": True, "settled": inv.settled,
+            "recording_now": (
+                inv.last_sample is not None
+                and (time.time() - inv.last_sample) < 300
+            ),
+            "last_sample_age_s": (
+                None if inv.last_sample is None else time.time() - inv.last_sample
+            ),
+        }
+    else:
+        payload = await research()
+
     if not payload.get("available"):
         return False, payload.get("error", "no recordings directory")
     settled = payload.get("settled", 0)
