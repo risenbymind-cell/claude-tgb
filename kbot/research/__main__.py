@@ -193,6 +193,60 @@ def cmd_inventory(args: argparse.Namespace) -> int:
     return 0 if inv.enough_for_a_verdict else 1
 
 
+def cmd_maker(args: argparse.Namespace) -> int:
+    """What a resting quote earns, and what it can afford to lose.
+
+    Every strategy in this project crossed the spread and lost roughly what
+    crossing costs. This command prices the other side of that trade. It does
+    not claim an edge: adverse selection is the term that decides one and
+    cannot be measured from candlesticks, so what is reported is the threshold
+    adverse selection has to stay under.
+    """
+    from decimal import Decimal
+
+    from ..config import DEFAULT_SERIES
+    from .history import load_cached
+    from .maker import MAKER_FEE_FRACTION, NO_DISCOUNT, measure, settlement_risk_c
+
+    directory = Path(args.dir)
+    markets = []
+    for series in DEFAULT_SERIES.values():
+        markets.extend(load_cached(directory, series))
+    if not markets:
+        print(f"No harvested history in {directory}.")
+        print("Run: python -m kbot.research history --per-series 600")
+        return 1
+
+    fraction = NO_DISCOUNT if args.no_maker_discount else MAKER_FEE_FRACTION
+    edges = measure(markets, maker_fraction=fraction)
+    pct = int(fraction * 100)
+    print(f"{len(markets)} markets · maker fee = {pct}% of taker\n")
+    if fraction == MAKER_FEE_FRACTION:
+        print("  NOTE: the 25% maker rate is from secondary sources and is not")
+        print("  confirmed against Kalshi. Re-run with --no-maker-discount for")
+        print("  the case where it does not exist; every band turns negative.\n")
+
+    print(f"{'band':>10}{'quotes':>8}{'half-sprd':>11}{'mkr fee':>9}"
+          f"{'gross':>8}{'taker':>9}{'swing':>8}{'settle':>9}{'fills/stuck':>13}")
+    for e in edges:
+        mid = (e.low_dc + e.high_dc) // 2
+        risk = settlement_risk_c(mid)
+        # How many clean fills one contract stuck at expiry wipes out. This is
+        # the number that makes inventory policy the strategy.
+        cost = f"{risk / e.gross_c:>13.0f}" if e.gross_c > 0 else f"{'n/a':>13}"
+        print(f"{e.low_dc // 10:>3}-{e.high_dc // 10:<3}c{e.n:>8}"
+              f"{e.half_spread_c:>11.3f}{-e.maker_fee_c:>9.3f}{e.gross_c:>+8.3f}"
+              f"{e.taker_cost_c:>+9.3f}{e.swing_c:>+8.3f}{risk:>9.2f}{cost}")
+
+    best = max(edges, key=lambda e: e.gross_c)
+    print(f"\n  best band {best.low_dc // 10}-{best.high_dc // 10}c: "
+          f"absorbs {best.breakeven_adverse_c:.3f}c of adverse selection, "
+          f"{100 * best.gross_c / best.half_spread_c:.0f}% of the half-spread")
+    print("  Nothing here has measured adverse selection. That needs order-book")
+    print("  depth over time -- see RECORDER.md.")
+    return 0
+
+
 def cmd_bands(args: argparse.Namespace) -> int:
     """Does the price itself carry a bias?
 
@@ -562,6 +616,14 @@ def build_parser() -> argparse.ArgumentParser:
         "inventory",
         help="what is recorded, and whether it can support a verdict yet",
     ).set_defaults(func=cmd_inventory)
+
+    mk = sub.add_parser(
+        "maker",
+        help="what a resting quote earns, vs what crossing the spread costs",
+    )
+    mk.add_argument("--no-maker-discount", action="store_true",
+                    help="assume makers pay the full taker fee")
+    mk.set_defaults(func=cmd_maker)
 
     ba = sub.add_parser(
         "bands",
