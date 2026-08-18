@@ -31,10 +31,18 @@ The reason is structural, not a matter of searching harder:
 Full workings: `research/FINDINGS.md`, `WHAT_BOTS_ACTUALLY_DO.md`,
 `SPOT_INDEX_TEST.md`, and `HOW_TO_FIND_ONE.md` for where to look instead.
 
-**The honest recommendation is to stop searching this market.** If you want to
-keep going, `HOW_TO_FIND_ONE.md` §"What I would do next" is the shortest path,
-and it starts with running the recorder — which is still at **2% uptime**, one
-33.8-hour gap. See `RECORDER.md`; it needs no credentials and one command.
+**Where the evidence now points: the passive side of the book.** Transaction
+costs explain **84%** of every loss recorded here — a taker pays 0.789c of
+half-spread plus 1.093c of fee, and loses 2.243c. A resting quote is paid that
+half-spread instead. See `research/MAKER.md`; the best cell absorbs 0.770c of
+adverse selection before turning negative, and two cheap things gate it —
+confirming Kalshi's maker fee, and running the recorder for order-book depth.
+
+**Directional prediction is finished.** Four candidates have now failed, the
+last of them at −$0.105/trade on 1,894 held-out markets after looking like
++$0.432 at t=+3.54. Both remaining avenues start with the recorder, which is
+still at **2% uptime** — see `RECORDER.md`; it needs no credentials and one
+command.
 
 ---
 
@@ -51,6 +59,8 @@ and it starts with running the recorder — which is still at **2% uptime**, one
 | **Self-tests** | Ten checks doing real operations, from the desk or `/selftest` |
 | **Latency** | P50/P95/P99 per stage |
 | **Out-of-sample testing** | `research/history.py` — scores a plan on Kalshi's own settled markets |
+| **Multiple-comparison guard** | `bands --scan` reports the cell count and chance expectation with every result |
+| **Maker economics** | `maker` — spread capture vs fee, and the adverse selection each cell can absorb |
 | **Safety** | Single-instance lock; duplicate in-flight intents refused; kill switch with four inputs |
 | **Container** | Built, run against live Kalshi, non-root, healthcheck verified |
 | **Public site** | Live at the github.io URL |
