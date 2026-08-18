@@ -84,10 +84,8 @@ and `GET /series/{ticker}` returns only `fee_type: quadratic` and
 `fee_multiplier: 1` with no maker field. Run `--no-maker-discount`: **every band
 turns negative.** A single real maker fill on a live account settles this.
 
-**3. Fill volume is unknown, and points the wrong way.** Wide spreads usually
-mean thin markets. The cells with the best per-fill economics are the ones most
-likely to have nobody trading against them. Fill rate does not change the sign
-— it changes whether this is worth running at all.
+**3. Fill probability is unmeasured** — though volume is not the problem. See
+below.
 
 ## Inventory is the strategy, not a detail
 
@@ -119,3 +117,70 @@ management layered on top of this strategy — they are most of it.
 
 Steps 1 and 2 are cheap and neither has been done. Nothing should be built
 until both are.
+
+---
+
+## Two corrections, from checking the exchange rather than the harvest
+
+Both of these change the picture and neither was visible in candlestick data.
+
+### Volume is not a problem
+
+An earlier draft worried that wide spreads meant markets nobody traded. That
+was measured against the wrong field (`volume`, which does not exist; it is
+`volume_fp`). Corrected, over 200 settled markets per series:
+
+| series | median volume | median open interest | markets with zero volume |
+|---|---|---|---|
+| KXBTC15M | 1,726,010 | 486,841 | 0% |
+| KXETH15M | 85,159 | 30,162 | 0% |
+| KXXRP15M | 25,865 | 9,866 | 0% |
+| KXDOGE15M | 19,986 | 9,136 | 0% |
+| KXSOL15M | 19,037 | 7,570 | 0% |
+
+Twenty thousand contracts per fifteen-minute window on the *thinnest* series,
+and not one market with no trading. These are liquid.
+
+### The spread is often exactly one tick, and that decides everything
+
+Kalshi's 15-minute crypto markets use `tapered_deci_cent` pricing:
+
+```
+ 0.0c -  10.0c   tick 0.1c
+10.0c -  90.0c   tick 1.0c
+90.0c - 100.0c   tick 0.1c
+```
+
+So a spread quoted in cents is meaningless on its own. Measured in **ticks**,
+over 26.6 days:
+
+| coin | 5-15¢ | 15-30¢ | 30-50¢ | 50-60¢ | 60-70¢ | 70-80¢ | 80-90¢ | 90-98¢ |
+|---|---|---|---|---|---|---|---|---|
+| BTC | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 |
+| ETH | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 1.0 | 3.0 |
+| SOL | 2.5 | 1.0 | 2.0 | 2.0 | 2.0 | 1.0 | 1.0 | 7.0 |
+| XRP | 3.0 | 1.0 | 2.0 | 2.0 | 2.0 | 2.0 | 1.0 | 8.0 |
+| DOGE | **4.9** | **2.0** | **2.0** | **2.0** | **2.0** | **2.0** | **2.0** | **9.0** |
+
+**1.0 means the book is at the minimum tick.** Nothing can be placed inside it.
+A resting order can only join the back of an existing queue and wait, so
+whether it fills is a question about queue position against whoever is already
+there — and on BTC, that is professionals with better latency.
+
+**BTC is at 1.0 in every single band.** There is nothing for a maker to do
+there, at any price, and no amount of spread analysis in cents would have shown
+it.
+
+Above 1.0 there is room to quote inside the best price, reach the front of the
+queue, and still earn. That is DOGE across the entire middle, XRP and SOL in
+parts of it, and the 90-98¢ band on everything except BTC — where DOGE runs
+**nine ticks wide**.
+
+This is a structural fact about the exchange's price grid, not a statistical
+effect measured on a sample. It does not have the multiple-comparisons problem
+that killed every previous candidate in this repository, and it did not move
+between a 6.3-day and a 26.6-day window because spreads do not move.
+
+**It is still not a proven edge.** It says where a maker has room to work. What
+it costs to use that room is adverse selection, which remains unmeasured and
+still needs the recorder.

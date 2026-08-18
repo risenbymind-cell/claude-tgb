@@ -146,3 +146,34 @@ def test_settlement_risk_scales_with_the_chance_of_being_stuck():
     a = settlement_risk_c(500, flatten_failure_rate=0.5)
     b = settlement_risk_c(500, flatten_failure_rate=1.0)
     assert b == pytest.approx(2 * a)
+
+
+# --- ticks: whether a maker has room to do anything at all ---
+
+
+def test_the_tick_is_fine_at_the_extremes_and_coarse_in_the_middle():
+    """Kalshi taper: 0.1c below 10c and above 90c, 1.0c between. Getting this
+    backwards makes the middle look ten times more quotable than it is."""
+    from kbot.research.maker import COARSE_TICK_DC, FINE_TICK_DC, tick_dc
+
+    assert tick_dc(50) == FINE_TICK_DC
+    assert tick_dc(950) == FINE_TICK_DC
+    assert tick_dc(500) == COARSE_TICK_DC
+    assert tick_dc(99) == FINE_TICK_DC and tick_dc(100) == COARSE_TICK_DC
+    assert tick_dc(899) == COARSE_TICK_DC and tick_dc(900) == FINE_TICK_DC
+
+
+def test_the_same_cent_spread_means_opposite_things_by_band():
+    """A 1c spread is the minimum possible book in the middle and ten ticks
+    wide at 95c. Quoting in cents hides the entire distinction."""
+    from kbot.research.maker import spread_in_ticks
+
+    assert spread_in_ticks(500, 490) == 1.0
+    assert spread_in_ticks(950, 940) == 10.0
+
+
+def test_a_one_tick_book_leaves_no_room_to_improve():
+    from kbot.research.maker import spread_in_ticks
+
+    assert spread_in_ticks(500, 490) == 1.0
+    assert spread_in_ticks(520, 500) == 2.0

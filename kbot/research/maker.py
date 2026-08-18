@@ -190,3 +190,41 @@ def settlement_risk_c(price_dc: int, *, flatten_failure_rate: float = 0.739) -> 
     """
     price = price_dc / DECI_CENTS_PER_DOLLAR
     return price * (1 - price) * flatten_failure_rate * 100
+
+
+#: Kalshi's tapered tick, read from `price_level_structure: tapered_deci_cent`
+#: and the `price_ranges` the markets endpoint returns: 0.1c below 10c and
+#: above 90c, 1.0c in between. In deci-cents, 1 and 10.
+FINE_TICK_DC = 1
+COARSE_TICK_DC = 10
+FINE_BELOW_DC = 100
+FINE_ABOVE_DC = 900
+
+
+def tick_dc(price_dc: int) -> int:
+    """Minimum price increment at `price_dc`, in deci-cents."""
+    if price_dc < FINE_BELOW_DC or price_dc >= FINE_ABOVE_DC:
+        return FINE_TICK_DC
+    return COARSE_TICK_DC
+
+
+def spread_in_ticks(ask_dc: int, bid_dc: int) -> float:
+    """How many ticks wide the book is.
+
+    This is the quantity that decides whether a maker has anything to do, and
+    it is not visible in a spread quoted in cents. A 1.0c spread is enormous in
+    the 90-98c band, where the tick is 0.1c, and is the *minimum possible* book
+    in the middle, where the tick is 1.0c.
+
+    * **1.0** -- the book is at the minimum tick. Nothing can be placed inside
+      it, so a resting order can only join the back of an existing queue and
+      wait. Whether that fills is a question about queue position, not price.
+    * **>1.0** -- there is room to quote inside the current best and go to the
+      front of the queue while still earning a spread.
+
+    Measured over 26.6 days, BTC is at exactly 1.0 in every band and DOGE is at
+    2.0 across the middle and 9.0 at 90-98c. That difference is structural
+    rather than statistical, which is why it is worth more than any of the
+    price-band results this module sits next to.
+    """
+    return (ask_dc - bid_dc) / tick_dc(ask_dc)
