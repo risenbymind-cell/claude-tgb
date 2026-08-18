@@ -122,3 +122,38 @@ test rather than by deepening it.
 The conclusion in `STATUS.md` is unchanged, and now has one more failed avenue
 behind it: **no edge has been found in these markets, and the price bias is not
 one either.**
+
+---
+
+## Confirmed dead on held-out data
+
+The refutation above is internal to the original sample. A later harvest of
+**2,494 BTC markets over 26.4 days** — of which **1,894 the original sample
+never contained** — settles it from outside:
+
+| dataset | n | win% | per trade | t |
+|---|---|---|---|---|
+| original BTC slice (6.3d) | 18 | 94.4% | +$0.215 | +0.39 |
+| **deep BTC, held out (20d)** | **183** | **91.8%** | **−$0.105** | **−0.51** |
+| deep BTC, all (26.4d) | 201 | 92.0% | −$0.076 | −0.40 |
+
+Held-out P&L: **−$19.13 over 183 trades with 15 losses**, bootstrap 95%
+[−0.529, +0.270]. Yesterday's five losses were the quiet week; the real rate is
+fifteen in twenty days.
+
+Scanning all 46 cells on the 26.4-day window gives **0 significantly positive**
+against a chance expectation of 1.2, 11 significantly negative, and
+**−$0.1717 per trade over 23,467 trades.**
+
+## One more thing worth not re-learning
+
+`HOW_TO_FIND_ONE.md` already contained this result, written before any of the
+above:
+
+> **Mispricing.** Binned by implied probability at T-600s, realised frequency
+> matched implied in every bucket — all |z| ≤ 1.7 over 727 observations. There
+> is no favourite-longshot bias here to harvest. Kalshi prices these honestly.
+
+The candidate contradicted a finding this project had already established, and
+that was not checked before reporting it. Prior negative results are evidence.
+Reading them first would have cost five minutes.
