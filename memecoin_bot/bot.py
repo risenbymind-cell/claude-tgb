@@ -265,7 +265,10 @@ def run(c: Config, state_file: Path, journal: Path, once: bool) -> None:
             log("status", "-", f"cash {b.sol:.3f} | equity {equity(b, held):.3f} SOL | open {len(b.positions)}")
             state_file.write_text(json.dumps({
                 "sol": b.sol, "positions": {k: asdict(v) for k, v in b.positions.items()},
-                "cooldown": b.cooldown, "day": b.day, "day_start_equity": b.day_start_equity}))
+                "cooldown": b.cooldown, "day": b.day, "day_start_equity": b.day_start_equity,
+                # read-only extras for the dashboard
+                "equity": equity(b, held), "prices": held, "sol_usd": sol_usd,
+                "updated": now, "config": asdict(c)}))
             if once:
                 return
             time.sleep(c.poll_s)

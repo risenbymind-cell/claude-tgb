@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Memecoin Paper Bot</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Ccircle cx=%278%27 cy=%278%27 r=%277%27 fill=%27%2308803d%27/%3E%3C/svg%3E">
+<style>
+:root{--bg:#f4f2ea;--panel:#fffdf6;--ink:#17140d;--muted:#6b665a;--line:#d8d2bf;--good:#0a7d43;--bad:#c62f1c;--warn:#a86a00;--accent:#1f3aff}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#101210;--panel:#181b18;--ink:#ecebe3;--muted:#9a9a8d;--line:#2b2f2b;--good:#3ecf82;--bad:#ff6b57;--warn:#e0a63a;--accent:#7b93ff}}
+:root[data-theme=dark]{--bg:#101210;--panel:#181b18;--ink:#ecebe3;--muted:#9a9a8d;--line:#2b2f2b;--good:#3ecf82;--bad:#ff6b57;--warn:#e0a63a;--accent:#7b93ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+main{max-width:1000px;margin:0 auto;padding:20px 16px 48px}
+header{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:baseline;justify-content:space-between;margin-bottom:6px}
+h1{font-size:22px;margin:0}
+h2{font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:28px 0 10px}
+.pill{font:600 12px ui-monospace,monospace;padding:3px 8px;border:1px solid var(--line);border-radius:99px;color:var(--muted)}
+.pill.ok{color:var(--good);border-color:var(--good)}.pill.stale{color:var(--warn);border-color:var(--warn)}.pill.halt{color:var(--bad);border-color:var(--bad)}
+.note{color:var(--muted);font-size:13px;margin:0}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+@media(max-width:640px){.kpis{grid-template-columns:repeat(2,1fr)}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px 14px}
+.card .l{font-size:12px;color:var(--muted)}
+.card .v{font:700 22px ui-monospace,monospace;margin-top:2px}
+.good{color:var(--good)}.bad{color:var(--bad)}
+.tbl{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:10px}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;padding:8px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+th{font-size:12px;color:var(--muted);font-weight:600}
+tr:last-child td{border-bottom:0}
+td.n,th.n{text-align:right;font-variant-numeric:tabular-nums}
+.empty{padding:16px;color:var(--muted)}
+#chart{width:100%;height:180px;display:block}
+.rules{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px}
+.rules ul{margin:6px 0 0;padding-left:18px;color:var(--muted);font-size:13.5px}
+.rules b{font-size:14px}
+.act{font:600 12px ui-monospace,monospace}
+.buy{color:var(--accent)}.sell{color:var(--good)}.halt,.skip{color:var(--warn)}
+footer{margin-top:32px;color:var(--muted);font-size:12.5px}
+button{font:inherit;background:var(--panel);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:4px 10px;cursor:pointer}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Memecoin Paper Bot</h1>
+    <span><span class="pill" id="status">loading…</span> <button id="theme" aria-label="Toggle theme">◐</button></span>
+  </header>
+  <p class="note">Virtual SOL only. Reads public DexScreener data; never touches a wallet. Not financial advice.</p>
+
+  <h2>Account</h2>
+  <div class="kpis">
+    <div class="card"><div class="l">Equity (SOL)</div><div class="v" id="eq">–</div></div>
+    <div class="card"><div class="l">P&amp;L vs start</div><div class="v" id="pnl">–</div></div>
+    <div class="card"><div class="l">Cash (SOL)</div><div class="v" id="cash">–</div></div>
+    <div class="card"><div class="l">Open / max</div><div class="v" id="open">–</div></div>
+  </div>
+
+  <h2>Equity curve</h2>
+  <div class="card"><svg id="chart" viewBox="0 0 800 180" preserveAspectRatio="none" role="img" aria-label="Equity over time"></svg>
+  <p class="note" id="chartnote"></p></div>
+
+  <h2>Open positions</h2>
+  <div class="tbl" id="pos"></div>
+
+  <h2>Rules it follows</h2>
+  <div class="rules" id="rules"></div>
+
+  <h2>Journal (latest 60)</h2>
+  <div class="tbl" id="jr"></div>
+
+  <footer>Refreshes every 10 s. Educational only; most meme coins go to zero.</footer>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const fmt = (x, d = 3) => (x == null || isNaN(x)) ? "–" : Number(x).toFixed(d);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+try { const t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+$("theme").onclick = () => {
+  const dark = matchMedia("(prefers-color-scheme:dark)").matches;
+  const cur = document.documentElement.dataset.theme || (dark ? "dark" : "light");
+  const next = cur === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("theme", next); } catch (e) {}
+};
+
+function parseCsv(t) {
+  const rows = []; let row = [], cur = "", q = false;
+  for (let i = 0; i < t.length; i++) {
+    const c = t[i];
+    if (q) { if (c === '"') { if (t[i+1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+    else if (c === '"') q = true;
+    else if (c === ",") { row.push(cur); cur = ""; }
+    else if (c === "\n" || c === "\r") { if (c === "\r" && t[i+1] === "\n") i++; row.push(cur); rows.push(row); row = []; cur = ""; }
+    else cur += c;
+  }
+  if (cur || row.length) { row.push(cur); rows.push(row); }
+  return rows.filter(r => r.length > 1).slice(1);
+}
+
+function renderChart(journal, start) {
+  const pts = journal.filter(r => r[1] === "status").map(r => {
+    const m = /equity ([\d.]+)/.exec(r[3]); return m ? +m[1] : null;
+  }).filter(v => v != null);
+  const svg = $("chart");
+  if (pts.length < 2) { svg.innerHTML = ""; $("chartnote").textContent = "Needs at least two bot cycles to draw."; return; }
+  const lo = Math.min(...pts, start), hi = Math.max(...pts, start), pad = (hi - lo) * .1 || .01;
+  const y = v => 170 - (v - (lo - pad)) / ((hi + pad) - (lo - pad)) * 160;
+  const x = i => 5 + i / (pts.length - 1) * 790;
+  const line = pts.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+  const up = pts[pts.length - 1] >= start;
+  svg.innerHTML = `<line x1="0" x2="800" y1="${y(start)}" y2="${y(start)}" stroke="var(--line)" stroke-dasharray="4 4"/>
+    <path d="${line}" fill="none" stroke="var(${up ? "--good" : "--bad"})" stroke-width="2" vector-effect="non-scaling-stroke"/>`;
+  $("chartnote").textContent = `${pts.length} cycles · low ${fmt(Math.min(...pts))} · high ${fmt(Math.max(...pts))} SOL · dashed = starting bankroll`;
+}
+
+const pc = x => +(x * 100).toFixed(2);
+function renderRules(c) {
+  if (!c) { $("rules").innerHTML = '<div class="empty">Start the bot to see its rules.</div>'; return; }
+  const box = (t, items) => `<div class="card"><b>${t}</b><ul>${items.map(i => `<li>${i}</li>`).join("")}</ul></div>`;
+  $("rules").innerHTML =
+    box("Vet before buying", [
+      `Liquidity ≥ $${c.min_liquidity_usd.toLocaleString()}`,
+      `Age ${c.min_age_min}–${c.max_age_min} min (skip the sniper window)`,
+      `≥ ${c.min_buys_5m} buys in 5 min, buy share ≥ ${pc(c.min_buy_ratio_5m)}%`,
+      `No chasing: 5 min change ≤ +${c.max_5m_change_pct}%, 1 h ≤ +${c.max_1h_change_pct}%`,
+      `Volume/liquidity ${c.min_vol_to_liq_1h}–${c.max_vol_to_liq_1h} (fake-volume check)`,
+      `FDV ≤ $${c.max_fdv_usd.toLocaleString()}`]) +
+    box("Size small", [
+      `${pc(c.risk_per_trade)}% of bankroll per trade`,
+      `Max ${c.max_positions} positions, ${pc(c.max_exposure)}% exposure`,
+      `Refuse fills costing > ${c.max_slip_pct}% slippage`, `${c.fee_pct}% fee charged`]) +
+    box("Exit plan, set before the buy", [
+      `Stop −${c.stop_pct}%`, `Sell ${pc(c.tp1_frac)}% at +${c.tp1_pct}%`,
+      `${c.trail_pct}% trailing stop on the rest`,
+      `Time stop after ${c.time_stop_min} min if within ±${c.time_stop_band_pct}%`]) +
+    box("Stay disciplined", [
+      `No new trades after −${pc(c.daily_loss_limit)}% on the day`,
+      `${c.cooldown_min} min cooldown after a stop (no revenge trades)`]);
+}
+
+function renderPositions(s) {
+  const ps = Object.values(s.positions || {});
+  if (!ps.length) { $("pos").innerHTML = '<div class="empty">No open positions.</div>'; return; }
+  const c = s.config || {};
+  $("pos").innerHTML = `<table><thead><tr><th>Coin</th><th class="n">Cost (SOL)</th><th class="n">Entry $</th><th class="n">Last $</th><th class="n">Change</th><th class="n">Stop $</th><th class="n">TP1 $</th><th>Held</th><th>Stage</th></tr></thead><tbody>${
+    ps.map(p => {
+      const last = (s.prices || {})[p.mint] ?? p.entry, chg = (last / p.entry - 1) * 100;
+      const held = Math.max(0, Math.round((Date.now() / 1000 - p.opened) / 60));
+      return `<tr><td><b>${esc(p.sym)}</b></td><td class="n">${fmt(p.qty_cost_sol)}</td>
+        <td class="n">${p.entry.toPrecision(4)}</td><td class="n">${last.toPrecision(4)}</td>
+        <td class="n ${chg >= 0 ? "good" : "bad"}">${chg >= 0 ? "+" : ""}${chg.toFixed(1)}%</td>
+        <td class="n">${c.stop_pct ? (p.entry * (1 - c.stop_pct / 100)).toPrecision(4) : "–"}</td>
+        <td class="n">${c.tp1_pct ? (p.entry * (1 + c.tp1_pct / 100)).toPrecision(4) : "–"}</td>
+        <td>${held} min</td><td>${p.tp1_done ? "runner (trailing)" : "initial"}</td></tr>`;
+    }).join("")}</tbody></table>`;
+}
+
+function renderJournal(rows) {
+  const r = rows.slice(-60).reverse();
+  if (!r.length) { $("jr").innerHTML = '<div class="empty">Journal is empty.</div>'; return; }
+  $("jr").innerHTML = `<table><thead><tr><th>Time</th><th>Action</th><th>Coin</th><th>Detail</th></tr></thead><tbody>${
+    r.map(x => `<tr><td>${esc(x[0])}</td><td class="act ${esc(x[1])}">${esc(x[1])}</td><td>${esc(x[2])}</td><td>${esc(x[3])}</td></tr>`).join("")}</tbody></table>`;
+}
+
+async function tick() {
+  try {
+    const [s, j] = await Promise.all([
+      fetch("state.json", {cache: "no-store"}).then(r => r.json()),
+      fetch("journal.csv", {cache: "no-store"}).then(r => r.text())]);
+    const rows = parseCsv(j), c = s.config || {}, start = c.start_sol || 10;
+    const age = s.updated ? Date.now() / 1000 - s.updated : null;
+    const halted = rows.length && rows[rows.length - 1][1] === "halt";
+    const st = $("status");
+    if (age == null) { st.textContent = "bot not started"; st.className = "pill stale"; }
+    else if (halted) { st.textContent = "halted: daily loss limit"; st.className = "pill halt"; }
+    else if (age > Math.max(120, (c.poll_s || 30) * 4)) { st.textContent = `stale · last update ${Math.round(age / 60)} min ago`; st.className = "pill stale"; }
+    else { st.textContent = "running"; st.className = "pill ok"; }
+    const eq = s.equity ?? s.sol;
+    $("eq").textContent = fmt(eq);
+    const pnl = eq != null ? (eq / start - 1) * 100 : null;
+    $("pnl").textContent = pnl == null ? "–" : `${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}%`;
+    $("pnl").className = "v " + (pnl == null ? "" : pnl >= 0 ? "good" : "bad");
+    $("cash").textContent = fmt(s.sol);
+    $("open").textContent = `${Object.keys(s.positions || {}).length} / ${c.max_positions ?? "–"}`;
+    renderChart(rows, start); renderPositions(s); renderRules(s.config); renderJournal(rows);
+  } catch (e) {
+    $("status").textContent = "can't reach dashboard server"; $("status").className = "pill halt";
+  }
+}
+tick(); setInterval(tick, 10000);
+</script>
+</body>
+</html>
